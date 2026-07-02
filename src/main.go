@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strings"
+	"st2c/src/lexer"
 )
 
 func main() {
@@ -17,7 +17,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("ST source loaded: %d bytes\n", len(data))
-	fmt.Println(strings.Repeat("-", 40))
-	fmt.Print(string(data))
+	fmt.Printf("ST source loaded: %d bytes\n\n", len(data))
+
+	l := lexer.New(string(data))
+	for {
+		tok := l.NextToken()
+		fmt.Printf("line %2d  %-12s %q\n", tok.Line, tok.Type, tok.Literal)
+		if tok.Type == lexer.EOF {
+			break
+		}
+	}
 }
