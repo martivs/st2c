@@ -6,7 +6,10 @@
 - Только целочисленные переменные (`INT`)
 - Конструкции: `IF / ELSE`, цикл `FOR`
 - Простая арифметика над переменными
-- Без вложенных конструкций
+
+> Исходно MVP планировался без вложенных конструкций, но рекурсивный спуск
+> в парсере поддерживает вложенность «бесплатно» (`IF`/`FOR` внутри тел
+> друг друга на любую глубину) — см. Этап 2.
 
 ## Архитектура
 Четыре последовательных этапа, каждый — отдельный Go-пакет:
@@ -53,6 +56,7 @@ st2c/
 - `New(*lexer.Lexer) *Parser`, `ParseProgram() (*ast.Program, error)`
 - Окно из двух токенов (`cur`/`peek`), хелперы `nextToken`/`expect`/`curIs`/`peekIs`
 - Правила: `parseProgram`, `parseVarBlock`, `parseStatements`, `parseStatement`, `parseAssign`, `parseIf`, `parseFor`
+- Вложенные конструкции поддерживаются: `parseStatement` для `IF`/`FOR` рекурсивно вызывает `parseStatements` для тела, поэтому вложенность любой глубины разбирается без спец-обработки
 - Приоритет операций — каскад по уровням: `parseExpression` (`> < =`) → `parseAdditive` (`+ -`) → `parseMultiplicative` (`* /`) → `parsePrimary` (`IDENT`, `INT_LIT`, `( expr )`); левая ассоциативность через цикл
 - Ошибки — **fail-fast**: поле `err`, `expect()`/`fail()` формируют сообщение с номером строки; `ParseProgram` возвращает первую ошибку
 - `optionalSemicolon()` — необязательный `;` после `END_IF`/`END_FOR` (есть в `example.st`)
