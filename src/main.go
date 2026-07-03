@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+
 	"st2c/src/lexer"
+	"st2c/src/parser"
 )
 
 func main() {
@@ -19,12 +21,15 @@ func main() {
 
 	fmt.Printf("ST source loaded: %d bytes\n\n", len(data))
 
-	l := lexer.New(string(data))
-	for {
-		tok := l.NextToken()
-		fmt.Printf("line %2d  %-12s %q\n", tok.Line, tok.Type, tok.Literal)
-		if tok.Type == lexer.EOF {
-			break
-		}
+	// Этап 2: лексер → парсер → печать AST.
+	// Лексер одноразовый (pull-модель), поэтому вывод потока токенов и
+	// разбор в дерево — взаимоисключающие. Печать токенов см. в git-истории
+	// Этапа 1.
+	p := parser.New(lexer.New(string(data)))
+	prog, err := p.ParseProgram()
+	if err != nil {
+		log.Fatal(err)
 	}
+
+	fmt.Print(prog.String())
 }

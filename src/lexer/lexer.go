@@ -24,6 +24,8 @@ const (
 	EQ        // =
 	COLON     // :
 	SEMICOLON // ;
+	LPAREN    // (
+	RPAREN    // )
 
 	PROGRAM
 	END_PROGRAM
@@ -45,6 +47,7 @@ var tokenNames = map[TokenType]string{
 	IDENT: "IDENT", INT_LIT: "INT_LIT",
 	ASSIGN: ":=", PLUS: "+", MINUS: "-", STAR: "*", SLASH: "/",
 	GT: ">", LT: "<", EQ: "=", COLON: ":", SEMICOLON: ";",
+	LPAREN: "(", RPAREN: ")",
 	PROGRAM: "PROGRAM", END_PROGRAM: "END_PROGRAM",
 	VAR: "VAR", END_VAR: "END_VAR", INT: "INT",
 	IF: "IF", THEN: "THEN", ELSE: "ELSE", END_IF: "END_IF",
@@ -101,6 +104,12 @@ func (l *Lexer) NextToken() Token {
 	case ch == ';':
 		l.pos++
 		return Token{Type: SEMICOLON, Literal: ";", Line: l.line}
+	case ch == '(':
+		l.pos++
+		return Token{Type: LPAREN, Literal: "(", Line: l.line}
+	case ch == ')':
+		l.pos++
+		return Token{Type: RPAREN, Literal: ")", Line: l.line}
 	case ch == '+':
 		l.pos++
 		return Token{Type: PLUS, Literal: "+", Line: l.line}
