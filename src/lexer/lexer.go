@@ -94,7 +94,7 @@ func (l *Lexer) NextToken() Token {
 	switch {
 	case ch == ':' && l.peek() == '=':
 		l.pos += 2
-		return Token{Type: ASSIGN, Literal: ":=", Line: l.line}
+		return Token{Type: ASSIGN, Literal: ":=", Line: l.line} // TODO: Literal duplicates tokenNames; unify when adding new token types
 	case ch == ':':
 		l.pos++
 		return Token{Type: COLON, Literal: ":", Line: l.line}
@@ -142,7 +142,7 @@ func (l *Lexer) peek() rune {
 func (l *Lexer) skipWhitespace() {
 	for l.pos < len(l.input) {
 		ch := l.input[l.pos]
-		if ch == '\n' {
+		if ch == '\n' { // FIXME
 			l.line++
 			l.pos++
 		} else if ch == ' ' || ch == '\t' || ch == '\r' {
