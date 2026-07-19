@@ -49,14 +49,14 @@ st2c/
 - `go test ./...` — обязательно зелено перед коммитом.
 - Лексер: table-driven (вход → список `(Type, Literal)`), регистр ключевых
   слов, номера строк.
-- Парсер: golden — `testdata/*.st` разбирается, `Program.String()` сверяется с
+- Парсер: golden — `testdata/*.st` разбирается, `SourceFile.String()` сверяется с
   `testdata/*.ast`; эталоны перегенерируются `go test ./src/parser -update`
   (diff просматривать вручную). Плюс негативные тесты: вход → подстрока
   сообщения об ошибке с номером строки.
 
 ### Что реализовано
 
-**`src/main.go`** — читает `.st`-файл, прогоняет лексер → парсер, печатает AST через `Program.String()`. Лексер одноразовый (pull-модель), поэтому вывод потока токенов Этапа 1 в git-истории, а не в текущем `main`.
+**`src/main.go`** — читает `.st`-файл, прогоняет лексер → парсер (`ParseSourceFile`), печатает AST каждого POU через `String()`. Лексер одноразовый (pull-модель), поэтому вывод потока токенов Этапа 1 в git-истории, а не в текущем `main`.
 
 **`src/lexer/lexer.go`** — полный лексер:
 - `TokenType` (iota): `EOF`, `ILLEGAL`, `IDENT`, `INT_LIT`, операторы (`+ - * / > < = <= >= <>`, `:=`), разделители (`: ; , ( )`), 20 ключевых слов (включая `BY`, семейство `VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT/VAR_TEMP` и квалификаторы `CONSTANT`/`RETAIN`)
@@ -68,11 +68,12 @@ st2c/
 **`src/ast/ast.go`** — узлы дерева через интерфейсы:
 - Интерфейсы `Node` (`String()`, `Line()`), `Statement`, `Expression`; маркерные методы `statementNode()`/`expressionNode()` разделяют операторы и выражения на уровне типов
 - `ast.Op` — собственный enum операций (`ADD … NE`, `NEG`) с `String()`, возвращающим исходные символы (`+`, `<=`, `<>`); AST отвязан от `lexer.TokenType`
+- Корень — `SourceFile{POUs []POU}`: компилируемая единица как список POU; интерфейс `POU` (маркер `pouNode()`), пока его реализует только `Program` — `FUNCTION`/`FUNCTION_BLOCK` лягут рядом без смены корня
 - Узлы: `Program` (`VarBlocks []*VarBlock`), `VarBlock{Kind VarKind, Constant, Retain bool, Decls}` — вид блока (`VAR`/`VAR_INPUT`/…) как данные (enum `VarKind` со `String()`), `VarDecl{Names []string, TypeName string, Init Expression}` — список имён (`a, b, c : INT;`), тип строкой (встроенный или пользовательский — решает sema), необязательный инициализатор (`x : INT := 5;`), `AssignStatement` (`Target Expression` — lvalue, пока всегда `*Identifier`; позже `IndexExpr`/`MemberExpr`), `IfStatement`, `ForStatement` (`Var *Identifier`, необязательный `Step Expression`, nil → шаг 1), `Identifier`, `IntLiteral`, `BinaryExpr` (арифметика и сравнения — единый тип, различаются полем `Op ast.Op`), `UnaryExpr` (унарный минус; позже `+`/`NOT`)
 - У каждого узла `String()` рекурсивно печатает поддерево с отступами; поле `Tok lexer.Token` хранит якорь для номера строки
 
 **`src/parser/parser.go`** — recursive descent:
-- `New(*lexer.Lexer) *Parser`, `ParseProgram() (*ast.Program, error)`
+- `New(*lexer.Lexer) *Parser`, `ParseSourceFile() (*ast.SourceFile, error)` — единственная точка входа: цикл по POU до EOF, диспетчер по стартовому ключевому слову (пока только `PROGRAM`; `FUNCTION`/`FUNCTION_BLOCK` — будущие ветки `switch`); мусор на верхнем уровне → ошибка
 - Окно из двух токенов (`cur`/`peek`), хелперы `nextToken`/`expect`/`curIs`/`peekIs`
 - Правила: `parseProgram`, `parseVarBlocks` (цикл по семейству `VAR*` через таблицу `varBlockKinds`, квалификаторы `CONSTANT`/`RETAIN`), `parseVarDecl` (список имён через запятую, тип, необязательный `:= init`), `parseType` (ключевое слово `INT` или любой `IDENT` — пользовательские типы не падают, допустимость проверит sema), `parseStatements`, `parseStatement`, `parseAssign` (цель — primary-lvalue, пока только идентификатор), `parseIf`, `parseFor` (необязательный `BY step` перед `DO`)
 - Вложенные конструкции поддерживаются: `parseStatement` для `IF`/`FOR` рекурсивно вызывает `parseStatements` для тела, поэтому вложенность любой глубины разбирается без спец-обработки
@@ -109,6 +110,6 @@ go run ./src examples/example.st
 Этапы реализуются строго по одному. Переход к следующему — только после явного «переходим дальше» от пользователя.
 
 ## Следующий шаг — Этап 3: Codegen
-Пакет `codegen` должен принимать корневой узел AST (`*ast.Program`) и генерировать эквивалентный код на C.
-Вход: `*ast.Program`. Выход: строка с C-кодом (или запись в файл).
+Пакет `codegen` должен принимать корневой узел AST (`*ast.SourceFile`) и генерировать эквивалентный код на C.
+Вход: `*ast.SourceFile`. Выход: строка с C-кодом (или запись в файл).
 Обход дерева — рекурсивный (по аналогии с `String()`): объявления `VAR` → декларации переменных, `AssignStatement`, `IfStatement` (`if/else`), `ForStatement` (`for`), выражения `BinaryExpr` с расстановкой скобок по приоритету.

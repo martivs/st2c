@@ -26,10 +26,12 @@ func main() {
 	// разбор в дерево — взаимоисключающие. Печать токенов см. в git-истории
 	// Этапа 1.
 	p := parser.New(lexer.New(string(data)))
-	prog, err := p.ParseProgram()
+	sf, err := p.ParseSourceFile()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Print(prog.String())
+	for _, pou := range sf.POUs {
+		fmt.Print(pou.String())
+	}
 }

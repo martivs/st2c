@@ -2,7 +2,7 @@
 // спуска (recursive descent): одна функция на одно правило грамматики.
 //
 // Обработка ошибок — fail-fast: при первой синтаксической ошибке поле err
-// заполняется, все методы после этого быстро сворачиваются, а ParseProgram
+// заполняется, все методы после этого быстро сворачиваются, а ParseSourceFile
 // возвращает эту ошибку. Ошибка передаётся как значение (result, error).
 package parser
 
@@ -32,14 +32,24 @@ func New(l *lexer.Lexer) *Parser {
 	return p
 }
 
-// ParseProgram — точка входа. Возвращает корень дерева и первую ошибку (nil,
-// если разбор успешен).
-func (p *Parser) ParseProgram() (*ast.Program, error) {
-	prog := p.parseProgram()
+// ParseSourceFile — точка входа: {POU} до EOF. Возвращает корень дерева и
+// первую ошибку (nil, если разбор успешен). Диспетчер по стартовому ключевому
+// слову; пока единственный вид POU — PROGRAM, ветки FUNCTION/FUNCTION_BLOCK
+// добавятся в этот же switch.
+func (p *Parser) ParseSourceFile() (*ast.SourceFile, error) {
+	sf := &ast.SourceFile{}
+	for p.err == nil && !p.curIs(lexer.EOF) {
+		switch p.cur.Type {
+		case lexer.PROGRAM:
+			sf.POUs = append(sf.POUs, p.parseProgram())
+		default:
+			p.fail(fmt.Sprintf("expected PROGRAM at top level, got %s %q", p.cur.Type, p.cur.Literal))
+		}
+	}
 	if p.err != nil {
 		return nil, p.err
 	}
-	return prog, nil
+	return sf, nil
 }
 
 // ---------------------------------------------------------------------------

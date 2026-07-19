@@ -80,7 +80,36 @@ func (o Op) String() string {
 // Корень и объявления
 // ---------------------------------------------------------------------------
 
-// Program — корень дерева: всё, что между PROGRAM и END_PROGRAM.
+// POU — program organisation unit (IEC 61131-3): PROGRAM, позже FUNCTION и
+// FUNCTION_BLOCK. Маркерный метод pouNode() — по образцу Statement/Expression.
+type POU interface {
+	Node
+	pouNode()
+}
+
+// SourceFile — корень дерева: компилируемая единица, список POU. Сейчас в
+// файле обычно одна PROGRAM, но форма корня уже не изменится с приходом
+// FUNCTION/FUNCTION_BLOCK.
+type SourceFile struct {
+	POUs []POU
+}
+
+func (f *SourceFile) Line() int {
+	if len(f.POUs) > 0 {
+		return f.POUs[0].Line()
+	}
+	return 0
+}
+
+func (f *SourceFile) String() string {
+	var b strings.Builder
+	for _, p := range f.POUs {
+		b.WriteString(p.String())
+	}
+	return b.String()
+}
+
+// Program — POU-программа: всё, что между PROGRAM и END_PROGRAM.
 type Program struct {
 	Name      string
 	VarBlocks []*VarBlock
@@ -88,6 +117,7 @@ type Program struct {
 	Tok       lexer.Token // токен PROGRAM
 }
 
+func (p *Program) pouNode()  {}
 func (p *Program) Line() int { return p.Tok.Line }
 func (p *Program) String() string {
 	var b strings.Builder

@@ -20,6 +20,25 @@ import (
 
 var update = flag.Bool("update", false, "перегенерировать golden-эталоны testdata/*.ast")
 
+// parseOneProgram — хелпер: разбирает исходник через ParseSourceFile и
+// возвращает единственную PROGRAM из корня.
+func parseOneProgram(t *testing.T, src string) *ast.Program {
+	t.Helper()
+	p := parser.New(lexer.New(src))
+	sf, err := p.ParseSourceFile()
+	if err != nil {
+		t.Fatalf("parse error: %v", err)
+	}
+	if len(sf.POUs) != 1 {
+		t.Fatalf("POU: got %d, want 1", len(sf.POUs))
+	}
+	prog, ok := sf.POUs[0].(*ast.Program)
+	if !ok {
+		t.Fatalf("ожидался *ast.Program, получен %T", sf.POUs[0])
+	}
+	return prog
+}
+
 func TestGolden(t *testing.T) {
 	stFiles, err := filepath.Glob(filepath.Join("testdata", "*.st"))
 	if err != nil {
@@ -36,11 +55,11 @@ func TestGolden(t *testing.T) {
 				t.Fatal(err)
 			}
 			p := parser.New(lexer.New(string(src)))
-			prog, perr := p.ParseProgram()
+			sf, perr := p.ParseSourceFile()
 			if perr != nil {
 				t.Fatalf("parse error: %v", perr)
 			}
-			got := prog.String()
+			got := sf.String()
 
 			goldenPath := filepath.Join("testdata", name+".ast")
 			if *update {
@@ -148,11 +167,7 @@ func TestExpressionStructure(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			src := "PROGRAM P\nres := " + tc.expr + ";\nEND_PROGRAM"
-			p := parser.New(lexer.New(src))
-			prog, err := p.ParseProgram()
-			if err != nil {
-				t.Fatalf("parse error: %v", err)
-			}
+			prog := parseOneProgram(t, src)
 			assign, ok := prog.Body[0].(*ast.AssignStatement)
 			if !ok {
 				t.Fatalf("ожидался AssignStatement, получен %T", prog.Body[0])
@@ -229,11 +244,7 @@ func TestForBy(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			src := "PROGRAM P\n" + tc.stmt + "\nEND_PROGRAM"
-			p := parser.New(lexer.New(src))
-			prog, err := p.ParseProgram()
-			if err != nil {
-				t.Fatalf("parse error: %v", err)
-			}
+			prog := parseOneProgram(t, src)
 			forStmt, ok := prog.Body[0].(*ast.ForStatement)
 			if !ok {
 				t.Fatalf("ожидался ForStatement, получен %T", prog.Body[0])
@@ -301,11 +312,7 @@ func TestVarBlocks(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			src := "PROGRAM P\n" + tc.vars + "\nEND_PROGRAM"
-			p := parser.New(lexer.New(src))
-			prog, err := p.ParseProgram()
-			if err != nil {
-				t.Fatalf("parse error: %v", err)
-			}
+			prog := parseOneProgram(t, src)
 			if len(prog.VarBlocks) != len(tc.want) {
 				t.Fatalf("блоков: got %d, want %d", len(prog.VarBlocks), len(tc.want))
 			}
@@ -317,6 +324,47 @@ func TestVarBlocks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSourceFile: фаза 5 — корень дерева SourceFile, цикл по POU до EOF.
+func TestSourceFile(t *testing.T) {
+	t.Run("один PROGRAM", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nEND_PROGRAM")
+		if prog.Name != "P" {
+			t.Errorf("имя программы: got %q, want %q", prog.Name, "P")
+		}
+	})
+	t.Run("два PROGRAM в одном файле", func(t *testing.T) {
+		src := "PROGRAM A\nEND_PROGRAM\nPROGRAM B\nEND_PROGRAM"
+		p := parser.New(lexer.New(src))
+		sf, err := p.ParseSourceFile()
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if len(sf.POUs) != 2 {
+			t.Fatalf("POU: got %d, want 2", len(sf.POUs))
+		}
+		for i, wantName := range []string{"A", "B"} {
+			prog, ok := sf.POUs[i].(*ast.Program)
+			if !ok {
+				t.Fatalf("POU %d: ожидался *ast.Program, получен %T", i, sf.POUs[i])
+			}
+			if prog.Name != wantName {
+				t.Errorf("POU %d: имя %q, want %q", i, prog.Name, wantName)
+			}
+		}
+	})
+	t.Run("SourceFile.String — конкатенация POU", func(t *testing.T) {
+		src := "PROGRAM A\nEND_PROGRAM\nPROGRAM B\nEND_PROGRAM"
+		p := parser.New(lexer.New(src))
+		sf, err := p.ParseSourceFile()
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		if got, want := sf.String(), "Program(A)\nProgram(B)\n"; got != want {
+			t.Errorf("String(): got %q, want %q", got, want)
+		}
+	})
 }
 
 // TestParseErrors: вход → подстрока ожидаемого сообщения об ошибке
@@ -383,6 +431,11 @@ func TestParseErrors(t *testing.T) {
 			wantSubstr: `line 2: expected :=, got + "+"`,
 		},
 		{
+			name:       "мусор на верхнем уровне после END_PROGRAM",
+			input:      "PROGRAM P\nEND_PROGRAM\nx := 1;\n",
+			wantSubstr: `line 3: expected PROGRAM at top level, got IDENT "x"`,
+		},
+		{
 			name:       "BY без выражения шага",
 			input:      "PROGRAM P\nFOR i := 1 TO 5 BY DO\ni := 1;\nEND_FOR\nEND_PROGRAM",
 			wantSubstr: `line 2: expected expression, got DO`,
@@ -391,7 +444,7 @@ func TestParseErrors(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			p := parser.New(lexer.New(tc.input))
-			_, err := p.ParseProgram()
+			_, err := p.ParseSourceFile()
 			if err == nil {
 				t.Fatalf("ожидалась ошибка с подстрокой %q, разбор прошёл без ошибок", tc.wantSubstr)
 			}
