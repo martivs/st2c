@@ -7,6 +7,7 @@ import (
 
 	"st2c/src/lexer"
 	"st2c/src/parser"
+	"st2c/src/sema"
 )
 
 func main() {
@@ -29,6 +30,15 @@ func main() {
 	sf, err := p.ParseSourceFile()
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	// Семантический анализ: в отличие от fail-fast парсера печатаются все
+	// найденные ошибки за один запуск.
+	if errs := sema.Check(sf); len(errs) > 0 {
+		for _, e := range errs {
+			fmt.Fprintln(os.Stderr, e)
+		}
+		os.Exit(1)
 	}
 
 	for _, pou := range sf.POUs {
