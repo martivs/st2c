@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"st2c/src/ast"
 	"st2c/src/lexer"
 	"st2c/src/parser"
 )
@@ -54,6 +55,111 @@ func TestGolden(t *testing.T) {
 			}
 			if got != string(want) {
 				t.Errorf("AST не совпал с эталоном %s\n--- got ---\n%s--- want ---\n%s", goldenPath, got, want)
+			}
+		})
+	}
+}
+
+// TestExpressionStructure: приоритеты и ассоциативность Pratt-парсера.
+// Выражение подставляется в присваивание, сравнивается String() значения.
+func TestExpressionStructure(t *testing.T) {
+	tests := []struct {
+		name string
+		expr string
+		want string // String() значения присваивания, без завершающего \n
+	}{
+		{
+			name: "левая ассоциативность вычитания",
+			expr: "a - b - c",
+			want: `Binary(-)
+  Binary(-)
+    Ident(a)
+    Ident(b)
+  Ident(c)`,
+		},
+		{
+			name: "умножение сильнее сложения",
+			expr: "a + b * c",
+			want: `Binary(+)
+  Ident(a)
+  Binary(*)
+    Ident(b)
+    Ident(c)`,
+		},
+		{
+			name: "унарный минус",
+			expr: "-x + 1",
+			want: `Binary(+)
+  Unary(-)
+    Ident(x)
+  Int(1)`,
+		},
+		{
+			name: "двойной унарный минус",
+			expr: "--x",
+			want: `Unary(-)
+  Unary(-)
+    Ident(x)`,
+		},
+		{
+			name: "нестрогое сравнение",
+			expr: "a <= b",
+			want: `Binary(<=)
+  Ident(a)
+  Ident(b)`,
+		},
+		{
+			name: "неравенство",
+			expr: "a <> b",
+			want: `Binary(<>)
+  Ident(a)
+  Ident(b)`,
+		},
+		{
+			name: "скобки перебивают приоритет",
+			expr: "(i + j) > 4",
+			want: `Binary(>)
+  Binary(+)
+    Ident(i)
+    Ident(j)
+  Int(4)`,
+		},
+		{
+			// P8 ревью: цепочка сравнений разбирается левоассоциативно без
+			// предупреждения — семантическая проверка BOOL/INT придёт с sema.
+			name: "цепочка сравнений левоассоциативна",
+			expr: "a < b < c",
+			want: `Binary(<)
+  Binary(<)
+    Ident(a)
+    Ident(b)
+  Ident(c)`,
+		},
+		{
+			name: "сравнение = слабее отношения <",
+			expr: "a = b < c",
+			want: `Binary(=)
+  Ident(a)
+  Binary(<)
+    Ident(b)
+    Ident(c)`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "PROGRAM P\nres := " + tc.expr + ";\nEND_PROGRAM"
+			p := parser.New(lexer.New(src))
+			prog, err := p.ParseProgram()
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+			assign, ok := prog.Body[0].(*ast.AssignStatement)
+			if !ok {
+				t.Fatalf("ожидался AssignStatement, получен %T", prog.Body[0])
+			}
+			got := strings.TrimRight(assign.Value.String(), "\n")
+			if got != tc.want {
+				t.Errorf("дерево выражения %q:\n--- got ---\n%s\n--- want ---\n%s", tc.expr, got, tc.want)
 			}
 		})
 	}

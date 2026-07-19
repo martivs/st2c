@@ -157,7 +157,7 @@ func (p *Parser) parseStatement() ast.Statement {
 func (p *Parser) parseAssign() ast.Statement {
 	name := p.expect(lexer.IDENT)
 	p.expect(lexer.ASSIGN)
-	value := p.parseExpression()
+	value := p.parseExpression(lowestPrec)
 	p.expect(lexer.SEMICOLON)
 	return &ast.AssignStatement{Target: name.Literal, Value: value, Tok: name}
 }
@@ -165,7 +165,7 @@ func (p *Parser) parseAssign() ast.Statement {
 // parseIf: IF expression THEN {statement} [ELSE {statement}] END_IF ;?
 func (p *Parser) parseIf() ast.Statement {
 	tok := p.expect(lexer.IF)
-	cond := p.parseExpression()
+	cond := p.parseExpression(lowestPrec)
 	p.expect(lexer.THEN)
 
 	stmt := &ast.IfStatement{Condition: cond, Tok: tok}
@@ -186,9 +186,9 @@ func (p *Parser) parseFor() ast.Statement {
 	tok := p.expect(lexer.FOR)
 	name := p.expect(lexer.IDENT)
 	p.expect(lexer.ASSIGN)
-	start := p.parseExpression()
+	start := p.parseExpression(lowestPrec)
 	p.expect(lexer.TO)
-	end := p.parseExpression()
+	end := p.parseExpression(lowestPrec)
 	p.expect(lexer.DO)
 
 	stmt := &ast.ForStatement{Var: name.Literal, Start: start, End: end, Tok: tok}
@@ -208,52 +208,65 @@ func (p *Parser) optionalSemicolon() {
 }
 
 // ---------------------------------------------------------------------------
-// Выражения: каскад по приоритетам (по одной функции на уровень)
+// Выражения: Pratt / precedence climbing
 //
-// От низшего приоритета к высшему:
-//   parseExpression      >  <  =      (сравнение)
-//   parseAdditive        +  -
-//   parseMultiplicative  *  /
-//   parsePrimary         IDENT, INT_LIT, ( expr )
-//
-// Левая ассоциативность — через цикл внутри уровня. Более приоритетные
-// операции «упаковываются» глубже в дерево, поэтому вычисляются первыми.
+// Одна функция parseExpression(minPrec) + таблица приоритетов prec. Уровни —
+// по IEC 61131-3: сравнение (= <>) слабее отношений (< > <= >=), дальше
+// аддитивные, мультипликативные, унарные, атомы. Новый бинарный оператор =
+// по одной строке в prec и binOps.
 // ---------------------------------------------------------------------------
 
-// parseExpression — самый низкий приоритет: сравнения > < =.
-func (p *Parser) parseExpression() ast.Expression {
-	left := p.parseAdditive()
-	for p.err == nil && (p.curIs(lexer.GT) || p.curIs(lexer.LT) || p.curIs(lexer.EQ)) {
+// prec — приоритеты бинарных операторов: больше — связывает сильнее.
+var prec = map[lexer.TokenType]int{
+	lexer.EQ: 1, lexer.NE: 1,
+	lexer.LT: 2, lexer.GT: 2, lexer.LE: 2, lexer.GE: 2,
+	lexer.PLUS: 3, lexer.MINUS: 3,
+	lexer.STAR: 4, lexer.SLASH: 4,
+}
+
+// lowestPrec — минимальный приоритет: parseExpression(lowestPrec) разбирает
+// выражение целиком.
+const lowestPrec = 1
+
+// binOps — перевод токена-оператора в операцию AST.
+var binOps = map[lexer.TokenType]ast.Op{
+	lexer.PLUS: ast.ADD, lexer.MINUS: ast.SUB,
+	lexer.STAR: ast.MUL, lexer.SLASH: ast.DIV,
+	lexer.LT: ast.LT, lexer.LE: ast.LE,
+	lexer.GT: ast.GT, lexer.GE: ast.GE,
+	lexer.EQ: ast.EQ, lexer.NE: ast.NE,
+}
+
+// parseExpression разбирает выражение, состоящее из операторов с приоритетом
+// не ниже minPrec. Правый операнд берётся с приоритетом pr+1 — это даёт
+// левую ассоциативность (a - b - c → (a-b)-c).
+func (p *Parser) parseExpression(minPrec int) ast.Expression {
+	left := p.parseUnary()
+	for p.err == nil {
+		pr, ok := prec[p.cur.Type]
+		if !ok || pr < minPrec {
+			break
+		}
 		op := p.cur
 		p.nextToken()
-		right := p.parseAdditive()
-		left = &ast.BinaryExpr{Left: left, Op: op.Type, Right: right, Tok: op}
+		right := p.parseExpression(pr + 1)
+		left = &ast.BinaryExpr{Left: left, Op: binOps[op.Type], Right: right, Tok: op}
 	}
 	return left
 }
 
-// parseAdditive — сложение и вычитание.
-func (p *Parser) parseAdditive() ast.Expression {
-	left := p.parseMultiplicative()
-	for p.err == nil && (p.curIs(lexer.PLUS) || p.curIs(lexer.MINUS)) {
-		op := p.cur
-		p.nextToken()
-		right := p.parseMultiplicative()
-		left = &ast.BinaryExpr{Left: left, Op: op.Type, Right: right, Tok: op}
+// parseUnary — унарный минус (рекурсивно: --x допустим); сюда же позже лягут
+// унарный `+` и NOT.
+func (p *Parser) parseUnary() ast.Expression {
+	if p.err != nil {
+		return nil
 	}
-	return left
-}
-
-// parseMultiplicative — умножение и деление.
-func (p *Parser) parseMultiplicative() ast.Expression {
-	left := p.parsePrimary()
-	for p.err == nil && (p.curIs(lexer.STAR) || p.curIs(lexer.SLASH)) {
-		op := p.cur
+	if p.curIs(lexer.MINUS) {
+		tok := p.cur
 		p.nextToken()
-		right := p.parsePrimary()
-		left = &ast.BinaryExpr{Left: left, Op: op.Type, Right: right, Tok: op}
+		return &ast.UnaryExpr{Op: ast.NEG, Operand: p.parseUnary(), Tok: tok}
 	}
-	return left
+	return p.parsePrimary()
 }
 
 // parsePrimary — атом: идентификатор, целый литерал или ( expression ).
@@ -277,7 +290,7 @@ func (p *Parser) parsePrimary() ast.Expression {
 		return &ast.IntLiteral{Value: val, Tok: tok}
 	case lexer.LPAREN:
 		p.nextToken()
-		expr := p.parseExpression()
+		expr := p.parseExpression(lowestPrec)
 		p.expect(lexer.RPAREN)
 		return expr
 	default:

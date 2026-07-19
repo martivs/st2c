@@ -64,11 +64,12 @@ st2c/
 - `Lexer.NextToken()` — посимвольный разбор: пропуск пробелов/переносов, комментарии, двухсимвольные операторы (`:=`, `<=`, `>=`, `<>`) через `peek()`, идентификаторы → ключевые слова (case-insensitive), целые литералы
 - Комментарии: блочные `(* ... *)` с вложенностью (3-я ред. IEC) и строчные `// ...`; незакрытый `(*` → `ILLEGAL`-токен с позицией начала; одиночные `(` и `/` остаются `LPAREN`/`SLASH`
 - `tokenNames` для ключевых слов строится из `keywords` в `init()` — новое слово добавляется в одном месте
-- Внимание: токены `LE`/`GE`/`NE` и `BY` парсер пока не принимает в грамматике — это фазы 2–3 плана `PLAN.md`
+- Внимание: ключевое слово `BY` парсер пока не принимает в грамматике — это фаза 3 плана `PLAN.md`
 
 **`src/ast/ast.go`** — узлы дерева через интерфейсы:
 - Интерфейсы `Node` (`String()`, `Line()`), `Statement`, `Expression`; маркерные методы `statementNode()`/`expressionNode()` разделяют операторы и выражения на уровне типов
-- Узлы: `Program`, `VarDecl`, `AssignStatement`, `IfStatement`, `ForStatement`, `Identifier`, `IntLiteral`, `BinaryExpr` (арифметика и сравнения — единый тип, различаются полем `Op`)
+- `ast.Op` — собственный enum операций (`ADD … NE`, `NEG`) с `String()`, возвращающим исходные символы (`+`, `<=`, `<>`); AST отвязан от `lexer.TokenType`
+- Узлы: `Program`, `VarDecl`, `AssignStatement`, `IfStatement`, `ForStatement`, `Identifier`, `IntLiteral`, `BinaryExpr` (арифметика и сравнения — единый тип, различаются полем `Op ast.Op`), `UnaryExpr` (унарный минус; позже `+`/`NOT`)
 - У каждого узла `String()` рекурсивно печатает поддерево с отступами; поле `Tok lexer.Token` хранит якорь для номера строки
 
 **`src/parser/parser.go`** — recursive descent:
@@ -76,7 +77,7 @@ st2c/
 - Окно из двух токенов (`cur`/`peek`), хелперы `nextToken`/`expect`/`curIs`/`peekIs`
 - Правила: `parseProgram`, `parseVarBlock`, `parseStatements`, `parseStatement`, `parseAssign`, `parseIf`, `parseFor`
 - Вложенные конструкции поддерживаются: `parseStatement` для `IF`/`FOR` рекурсивно вызывает `parseStatements` для тела, поэтому вложенность любой глубины разбирается без спец-обработки
-- Приоритет операций — каскад по уровням: `parseExpression` (`> < =`) → `parseAdditive` (`+ -`) → `parseMultiplicative` (`* /`) → `parsePrimary` (`IDENT`, `INT_LIT`, `( expr )`); левая ассоциативность через цикл
+- Выражения — Pratt / precedence climbing: одна `parseExpression(minPrec int)` + таблица `prec map[lexer.TokenType]int` (уровни по IEC: `= <>` слабее `< > <= >=`, дальше `+ -`, `* /`); новый бинарный оператор = строка в `prec` и `binOps`. `parseUnary` (унарный `-`, рекурсивно) → `parsePrimary` (`IDENT`, `INT_LIT`, `( expr )`); левая ассоциативность — правый операнд с `pr+1`
 - Ошибки — **fail-fast**: поле `err`, `expect()`/`fail()` формируют сообщение с номером строки; `ParseProgram` возвращает первую ошибку
 - `optionalSemicolon()` — необязательный `;` после `END_IF`/`END_FOR` (есть в `example.st`)
 

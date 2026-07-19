@@ -39,6 +39,44 @@ type Expression interface {
 // где нужен оператор.
 
 // ---------------------------------------------------------------------------
+// Операции
+// ---------------------------------------------------------------------------
+
+// Op — собственный enum операций AST. Отвязывает дерево от представления
+// токенов лексера: семантике и codegen не важно, каким TokenType лексер
+// закодировал `<>`.
+type Op int
+
+const (
+	ADD Op = iota // +
+	SUB           // -
+	MUL           // *
+	DIV           // /
+	LT            // <
+	LE            // <=
+	GT            // >
+	GE            // >=
+	EQ            // =
+	NE            // <>
+	NEG           // унарный минус
+)
+
+var opNames = map[Op]string{
+	ADD: "+", SUB: "-", MUL: "*", DIV: "/",
+	LT: "<", LE: "<=", GT: ">", GE: ">=", EQ: "=", NE: "<>",
+	NEG: "-",
+}
+
+// String возвращает исходный символ операции (`+`, `<=`, …) — те же метки,
+// что печатал лексерный TokenType, поэтому golden-эталоны текстово стабильны.
+func (o Op) String() string {
+	if s, ok := opNames[o]; ok {
+		return s
+	}
+	return "UNKNOWN"
+}
+
+// ---------------------------------------------------------------------------
 // Корень и объявления
 // ---------------------------------------------------------------------------
 
@@ -172,11 +210,11 @@ func (e *IntLiteral) Line() int       { return e.Tok.Line }
 func (e *IntLiteral) String() string  { return fmt.Sprintf("Int(%d)", e.Value) }
 
 // BinaryExpr — бинарная операция: и арифметика (+ - * /), и сравнения
-// (> < =). Различаются полем Op. Приоритет операций задаётся не типом
-// узла, а формой дерева, которую строит parser.
+// (> < = <= >= <>). Различаются полем Op. Приоритет операций задаётся не
+// типом узла, а формой дерева, которую строит parser.
 type BinaryExpr struct {
 	Left  Expression
-	Op    lexer.TokenType
+	Op    Op
 	Right Expression
 	Tok   lexer.Token // токен-оператор
 }
@@ -188,6 +226,23 @@ func (e *BinaryExpr) String() string {
 	fmt.Fprintf(&b, "Binary(%s)\n", e.Op)
 	indent(&b, e.Left.String(), 1)
 	indent(&b, e.Right.String(), 1)
+	return b.String()
+}
+
+// UnaryExpr — унарная операция: `-x`. Сейчас Op всегда NEG; унарный `+` и
+// NOT лягут в этот же узел.
+type UnaryExpr struct {
+	Op      Op
+	Operand Expression
+	Tok     lexer.Token // токен-оператор
+}
+
+func (e *UnaryExpr) expressionNode() {}
+func (e *UnaryExpr) Line() int       { return e.Tok.Line }
+func (e *UnaryExpr) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Unary(%s)\n", e.Op)
+	indent(&b, e.Operand.String(), 1)
 	return b.String()
 }
 
