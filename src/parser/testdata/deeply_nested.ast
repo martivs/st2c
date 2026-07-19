@@ -1,0 +1,46 @@
+Program(DeeplyNested)
+  VarDecl(i : INT)
+  VarDecl(j : INT)
+  VarDecl(acc : INT)
+  Assign(acc :=)
+    Int(0)
+  For(i)
+    Start:
+      Int(1)
+    End:
+      Int(3)
+    Do:
+      For(j)
+        Start:
+          Int(1)
+        End:
+          Int(3)
+        Do:
+          If
+            Cond:
+              Binary(>)
+                Binary(+)
+                  Ident(i)
+                  Ident(j)
+                Int(4)
+            Then:
+              If
+                Cond:
+                  Binary(=)
+                    Ident(i)
+                    Ident(j)
+                Then:
+                  Assign(acc :=)
+                    Binary(+)
+                      Ident(acc)
+                      Int(1)
+                Else:
+                  Assign(acc :=)
+                    Binary(+)
+                      Ident(acc)
+                      Int(2)
+            Else:
+              Assign(acc :=)
+                Binary(-)
+                  Ident(acc)
+                  Int(1)

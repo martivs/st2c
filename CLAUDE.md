@@ -27,15 +27,32 @@
 ```
 st2c/
 ├── go.mod                    # module st2c, go 1.22
-├── examples/
-│   └── example.st            # пример ST-программы для разработки
+├── examples/                 # примеры ST-программ для разработки
+│   ├── example.st
+│   ├── nested_if_in_for.st
+│   ├── nested_for_in_if.st
+│   └── deeply_nested.st
 └── src/
     ├── main.go               # точка входа: лексер → парсер → печать AST
-    ├── lexer/lexer.go        # package lexer (готов)
-    ├── parser/parser.go      # package parser (готов)
+    ├── lexer/
+    │   ├── lexer.go          # package lexer (готов)
+    │   └── lexer_test.go     # table-driven тесты токенов
+    ├── parser/
+    │   ├── parser.go         # package parser (готов)
+    │   ├── parser_test.go    # golden-тесты AST + тесты ошибок
+    │   └── testdata/         # 4 примера *.st + эталоны *.ast
     ├── ast/ast.go            # package ast (готов)
     └── codegen/codegen.go    # package codegen (заглушка)
 ```
+
+### Тесты
+- `go test ./...` — обязательно зелено перед коммитом.
+- Лексер: table-driven (вход → список `(Type, Literal)`), регистр ключевых
+  слов, номера строк.
+- Парсер: golden — `testdata/*.st` разбирается, `Program.String()` сверяется с
+  `testdata/*.ast`; эталоны перегенерируются `go test ./src/parser -update`
+  (diff просматривать вручную). Плюс негативные тесты: вход → подстрока
+  сообщения об ошибке с номером строки.
 
 ### Что реализовано
 

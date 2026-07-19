@@ -1,0 +1,27 @@
+Program(NestedForInIf)
+  VarDecl(x : INT)
+  VarDecl(i : INT)
+  VarDecl(total : INT)
+  Assign(x :=)
+    Int(7)
+  Assign(total :=)
+    Int(0)
+  If
+    Cond:
+      Binary(>)
+        Ident(x)
+        Int(5)
+    Then:
+      For(i)
+        Start:
+          Int(1)
+        End:
+          Ident(x)
+        Do:
+          Assign(total :=)
+            Binary(+)
+              Ident(total)
+              Ident(i)
+    Else:
+      Assign(total :=)
+        Int(0)

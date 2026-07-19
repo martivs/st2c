@@ -1,0 +1,29 @@
+Program(NestedIfInFor)
+  VarDecl(i : INT)
+  VarDecl(sum : INT)
+  VarDecl(flag : INT)
+  Assign(sum :=)
+    Int(0)
+  Assign(flag :=)
+    Int(0)
+  For(i)
+    Start:
+      Int(1)
+    End:
+      Int(10)
+    Do:
+      If
+        Cond:
+          Binary(>)
+            Ident(i)
+            Int(5)
+        Then:
+          Assign(sum :=)
+            Binary(+)
+              Ident(sum)
+              Ident(i)
+        Else:
+          Assign(flag :=)
+            Binary(+)
+              Ident(flag)
+              Int(1)
