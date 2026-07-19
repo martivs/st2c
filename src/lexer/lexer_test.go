@@ -59,13 +59,32 @@ func TestAllTokens(t *testing.T) {
 			},
 		},
 		{
+			name:  "var-family keywords and qualifiers",
+			input: "VAR_INPUT VAR_OUTPUT VAR_IN_OUT VAR_TEMP CONSTANT RETAIN",
+			want: []expTok{
+				{VAR_INPUT, "VAR_INPUT"}, {VAR_OUTPUT, "VAR_OUTPUT"},
+				{VAR_IN_OUT, "VAR_IN_OUT"}, {VAR_TEMP, "VAR_TEMP"},
+				{CONSTANT, "CONSTANT"}, {RETAIN, "RETAIN"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "comma in name list",
+			input: "a, b, c : INT;",
+			want: []expTok{
+				{IDENT, "a"}, {COMMA, ","}, {IDENT, "b"}, {COMMA, ","}, {IDENT, "c"},
+				{COLON, ":"}, {INT, "INT"}, {SEMICOLON, ";"},
+				{EOF, ""},
+			},
+		},
+		{
 			name:  "operators and delimiters",
-			input: ":= + - * / > < = <= >= <> : ; ( )",
+			input: ":= + - * / > < = <= >= <> : ; , ( )",
 			want: []expTok{
 				{ASSIGN, ":="}, {PLUS, "+"}, {MINUS, "-"}, {STAR, "*"}, {SLASH, "/"},
 				{GT, ">"}, {LT, "<"}, {EQ, "="},
 				{LE, "<="}, {GE, ">="}, {NE, "<>"},
-				{COLON, ":"}, {SEMICOLON, ";"},
+				{COLON, ":"}, {SEMICOLON, ";"}, {COMMA, ","},
 				{LPAREN, "("}, {RPAREN, ")"},
 				{EOF, ""},
 			},

@@ -59,7 +59,7 @@ st2c/
 **`src/main.go`** — читает `.st`-файл, прогоняет лексер → парсер, печатает AST через `Program.String()`. Лексер одноразовый (pull-модель), поэтому вывод потока токенов Этапа 1 в git-истории, а не в текущем `main`.
 
 **`src/lexer/lexer.go`** — полный лексер:
-- `TokenType` (iota): `EOF`, `ILLEGAL`, `IDENT`, `INT_LIT`, операторы (`+ - * / > < = <= >= <>`, `:=`), разделители (`: ; ( )`), 14 ключевых слов (включая `BY`)
+- `TokenType` (iota): `EOF`, `ILLEGAL`, `IDENT`, `INT_LIT`, операторы (`+ - * / > < = <= >= <>`, `:=`), разделители (`: ; , ( )`), 20 ключевых слов (включая `BY`, семейство `VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT/VAR_TEMP` и квалификаторы `CONSTANT`/`RETAIN`)
 - `Token{Type, Literal, Line, Col}` — позиция токена: строка и колонка (1-based, в рунах; `lineStart` в лексере, сброс на `\n`)
 - `Lexer.NextToken()` — посимвольный разбор: пропуск пробелов/переносов, комментарии, двухсимвольные операторы (`:=`, `<=`, `>=`, `<>`) через `peek()`, идентификаторы → ключевые слова (case-insensitive), целые литералы
 - Комментарии: блочные `(* ... *)` с вложенностью (3-я ред. IEC) и строчные `// ...`; незакрытый `(*` → `ILLEGAL`-токен с позицией начала; одиночные `(` и `/` остаются `LPAREN`/`SLASH`
@@ -68,13 +68,13 @@ st2c/
 **`src/ast/ast.go`** — узлы дерева через интерфейсы:
 - Интерфейсы `Node` (`String()`, `Line()`), `Statement`, `Expression`; маркерные методы `statementNode()`/`expressionNode()` разделяют операторы и выражения на уровне типов
 - `ast.Op` — собственный enum операций (`ADD … NE`, `NEG`) с `String()`, возвращающим исходные символы (`+`, `<=`, `<>`); AST отвязан от `lexer.TokenType`
-- Узлы: `Program`, `VarDecl`, `AssignStatement` (`Target Expression` — lvalue, пока всегда `*Identifier`; позже `IndexExpr`/`MemberExpr`), `IfStatement`, `ForStatement` (`Var *Identifier`, необязательный `Step Expression`, nil → шаг 1), `Identifier`, `IntLiteral`, `BinaryExpr` (арифметика и сравнения — единый тип, различаются полем `Op ast.Op`), `UnaryExpr` (унарный минус; позже `+`/`NOT`)
+- Узлы: `Program` (`VarBlocks []*VarBlock`), `VarBlock{Kind VarKind, Constant, Retain bool, Decls}` — вид блока (`VAR`/`VAR_INPUT`/…) как данные (enum `VarKind` со `String()`), `VarDecl{Names []string, TypeName string, Init Expression}` — список имён (`a, b, c : INT;`), тип строкой (встроенный или пользовательский — решает sema), необязательный инициализатор (`x : INT := 5;`), `AssignStatement` (`Target Expression` — lvalue, пока всегда `*Identifier`; позже `IndexExpr`/`MemberExpr`), `IfStatement`, `ForStatement` (`Var *Identifier`, необязательный `Step Expression`, nil → шаг 1), `Identifier`, `IntLiteral`, `BinaryExpr` (арифметика и сравнения — единый тип, различаются полем `Op ast.Op`), `UnaryExpr` (унарный минус; позже `+`/`NOT`)
 - У каждого узла `String()` рекурсивно печатает поддерево с отступами; поле `Tok lexer.Token` хранит якорь для номера строки
 
 **`src/parser/parser.go`** — recursive descent:
 - `New(*lexer.Lexer) *Parser`, `ParseProgram() (*ast.Program, error)`
 - Окно из двух токенов (`cur`/`peek`), хелперы `nextToken`/`expect`/`curIs`/`peekIs`
-- Правила: `parseProgram`, `parseVarBlock`, `parseStatements`, `parseStatement`, `parseAssign` (цель — primary-lvalue, пока только идентификатор), `parseIf`, `parseFor` (необязательный `BY step` перед `DO`)
+- Правила: `parseProgram`, `parseVarBlocks` (цикл по семейству `VAR*` через таблицу `varBlockKinds`, квалификаторы `CONSTANT`/`RETAIN`), `parseVarDecl` (список имён через запятую, тип, необязательный `:= init`), `parseType` (ключевое слово `INT` или любой `IDENT` — пользовательские типы не падают, допустимость проверит sema), `parseStatements`, `parseStatement`, `parseAssign` (цель — primary-lvalue, пока только идентификатор), `parseIf`, `parseFor` (необязательный `BY step` перед `DO`)
 - Вложенные конструкции поддерживаются: `parseStatement` для `IF`/`FOR` рекурсивно вызывает `parseStatements` для тела, поэтому вложенность любой глубины разбирается без спец-обработки
 - Выражения — Pratt / precedence climbing: одна `parseExpression(minPrec int)` + таблица `prec map[lexer.TokenType]int` (уровни по IEC: `= <>` слабее `< > <= >=`, дальше `+ -`, `* /`); новый бинарный оператор = строка в `prec` и `binOps`. `parseUnary` (унарный `-`, рекурсивно) → `parsePrimary` (`IDENT`, `INT_LIT`, `( expr )`); левая ассоциативность — правый операнд с `pr+1`
 - Ошибки — **fail-fast**: поле `err`, `expect()`/`fail()` формируют сообщение с номером строки; `ParseProgram` возвращает первую ошибку
@@ -85,7 +85,8 @@ go run ./src examples/example.st
 # ST source loaded: 214 bytes
 #
 # Program(Example)
-#   VarDecl(x : INT)
+#   VarBlock(VAR)
+#     VarDecl(x : INT)
 #   ...
 #   For(x)
 #     ...

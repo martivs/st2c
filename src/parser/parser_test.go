@@ -246,6 +246,79 @@ func TestForBy(t *testing.T) {
 	}
 }
 
+// TestVarBlocks: фаза 4 — виды VAR-блоков, списки имён, инициализаторы,
+// пользовательские имена типов, квалификаторы CONSTANT/RETAIN.
+func TestVarBlocks(t *testing.T) {
+	tests := []struct {
+		name string
+		vars string // блоки объявлений между PROGRAM P и телом
+		want []string // String() каждого блока, без завершающего \n
+	}{
+		{
+			name: "несколько блоков разных видов",
+			vars: "VAR x : INT; END_VAR\nVAR_INPUT a : INT; END_VAR\nVAR_OUTPUT b : INT; END_VAR\nVAR_IN_OUT c : INT; END_VAR\nVAR_TEMP t : INT; END_VAR",
+			want: []string{
+				"VarBlock(VAR)\n  VarDecl(x : INT)",
+				"VarBlock(VAR_INPUT)\n  VarDecl(a : INT)",
+				"VarBlock(VAR_OUTPUT)\n  VarDecl(b : INT)",
+				"VarBlock(VAR_IN_OUT)\n  VarDecl(c : INT)",
+				"VarBlock(VAR_TEMP)\n  VarDecl(t : INT)",
+			},
+		},
+		{
+			name: "список имён в одном объявлении",
+			vars: "VAR a, b, c : INT; END_VAR",
+			want: []string{"VarBlock(VAR)\n  VarDecl(a, b, c : INT)"},
+		},
+		{
+			name: "инициализатор",
+			vars: "VAR x : INT := 5; y : INT := -1 + 2; END_VAR",
+			want: []string{`VarBlock(VAR)
+  VarDecl(x : INT)
+    Init:
+      Int(5)
+  VarDecl(y : INT)
+    Init:
+      Binary(+)
+        Unary(-)
+          Int(1)
+        Int(2)`},
+		},
+		{
+			name: "пользовательское имя типа",
+			vars: "VAR m : MyType; END_VAR",
+			want: []string{"VarBlock(VAR)\n  VarDecl(m : MyType)"},
+		},
+		{
+			name: "квалификаторы CONSTANT и RETAIN",
+			vars: "VAR CONSTANT k : INT := 7; END_VAR\nVAR RETAIN r : INT; END_VAR",
+			want: []string{
+				"VarBlock(VAR CONSTANT)\n  VarDecl(k : INT)\n    Init:\n      Int(7)",
+				"VarBlock(VAR RETAIN)\n  VarDecl(r : INT)",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "PROGRAM P\n" + tc.vars + "\nEND_PROGRAM"
+			p := parser.New(lexer.New(src))
+			prog, err := p.ParseProgram()
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+			if len(prog.VarBlocks) != len(tc.want) {
+				t.Fatalf("блоков: got %d, want %d", len(prog.VarBlocks), len(tc.want))
+			}
+			for i, want := range tc.want {
+				got := strings.TrimRight(prog.VarBlocks[i].String(), "\n")
+				if got != want {
+					t.Errorf("блок %d:\n--- got ---\n%s\n--- want ---\n%s", i, got, want)
+				}
+			}
+		})
+	}
+}
+
 // TestParseErrors: вход → подстрока ожидаемого сообщения об ошибке
 // (включая номер строки).
 func TestParseErrors(t *testing.T) {
@@ -280,9 +353,14 @@ func TestParseErrors(t *testing.T) {
 			wantSubstr: `expected END_PROGRAM`,
 		},
 		{
-			name:       "не-INT тип в объявлении",
-			input:      "PROGRAM P\nVAR\nx : REAL;\nEND_VAR\nEND_PROGRAM",
-			wantSubstr: `line 3: expected INT`,
+			name:       "литерал вместо имени типа в объявлении",
+			input:      "PROGRAM P\nVAR\nx : 5;\nEND_VAR\nEND_PROGRAM",
+			wantSubstr: `line 3: expected type name, got INT_LIT "5"`,
+		},
+		{
+			name:       "пропущена запятая или двоеточие в списке имён",
+			input:      "PROGRAM P\nVAR\na b : INT;\nEND_VAR\nEND_PROGRAM",
+			wantSubstr: `line 3: expected :`,
 		},
 		{
 			name:       "нет выражения после оператора",

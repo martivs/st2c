@@ -81,38 +81,99 @@ func (p *Parser) fail(msg string) {
 // Грамматика: правила сверху вниз
 // ---------------------------------------------------------------------------
 
-// parseProgram: PROGRAM IDENT [VAR-block] {statement} END_PROGRAM
+// parseProgram: PROGRAM IDENT {VAR-block} {statement} END_PROGRAM
 func (p *Parser) parseProgram() *ast.Program {
 	tok := p.expect(lexer.PROGRAM)
 	name := p.expect(lexer.IDENT)
 
 	prog := &ast.Program{Name: name.Literal, Tok: tok}
-
-	if p.curIs(lexer.VAR) {
-		prog.Vars = p.parseVarBlock()
-	}
-
+	prog.VarBlocks = p.parseVarBlocks()
 	prog.Body = p.parseStatements()
 
 	p.expect(lexer.END_PROGRAM)
 	return prog
 }
 
-// parseVarBlock: VAR { IDENT : INT ; } END_VAR
-func (p *Parser) parseVarBlock() []*ast.VarDecl {
-	p.expect(lexer.VAR)
+// varBlockKinds — стартовые токены семейства VAR* → вид блока.
+var varBlockKinds = map[lexer.TokenType]ast.VarKind{
+	lexer.VAR:        ast.VarPlain,
+	lexer.VAR_INPUT:  ast.VarInput,
+	lexer.VAR_OUTPUT: ast.VarOutput,
+	lexer.VAR_IN_OUT: ast.VarInOut,
+	lexer.VAR_TEMP:   ast.VarTemp,
+}
 
-	var decls []*ast.VarDecl
+// parseVarBlocks — блоки объявлений подряд, каждый из семейства VAR*.
+func (p *Parser) parseVarBlocks() []*ast.VarBlock {
+	var blocks []*ast.VarBlock
+	for p.err == nil {
+		kind, ok := varBlockKinds[p.cur.Type]
+		if !ok {
+			break
+		}
+		blocks = append(blocks, p.parseVarBlock(kind))
+	}
+	return blocks
+}
+
+// parseVarBlock: VAR* [CONSTANT] [RETAIN] { var-decl } END_VAR
+func (p *Parser) parseVarBlock(kind ast.VarKind) *ast.VarBlock {
+	blk := &ast.VarBlock{Kind: kind, Tok: p.cur}
+	p.nextToken()
+
+	for {
+		if p.curIs(lexer.CONSTANT) && !blk.Constant {
+			blk.Constant = true
+			p.nextToken()
+		} else if p.curIs(lexer.RETAIN) && !blk.Retain {
+			blk.Retain = true
+			p.nextToken()
+		} else {
+			break
+		}
+	}
+
 	for p.err == nil && !p.curIs(lexer.END_VAR) && !p.curIs(lexer.EOF) {
-		name := p.expect(lexer.IDENT)
-		p.expect(lexer.COLON)
-		p.expect(lexer.INT)
-		p.expect(lexer.SEMICOLON)
-		decls = append(decls, &ast.VarDecl{Name: name.Literal, Tok: name})
+		blk.Decls = append(blk.Decls, p.parseVarDecl())
 	}
 
 	p.expect(lexer.END_VAR)
-	return decls
+	return blk
+}
+
+// parseVarDecl: IDENT {, IDENT} : type [:= expression] ;
+func (p *Parser) parseVarDecl() *ast.VarDecl {
+	first := p.expect(lexer.IDENT)
+	decl := &ast.VarDecl{Names: []string{first.Literal}, Tok: first}
+	for p.err == nil && p.curIs(lexer.COMMA) {
+		p.nextToken()
+		name := p.expect(lexer.IDENT)
+		decl.Names = append(decl.Names, name.Literal)
+	}
+
+	p.expect(lexer.COLON)
+	decl.TypeName = p.parseType()
+
+	if p.curIs(lexer.ASSIGN) {
+		p.nextToken()
+		decl.Init = p.parseExpression(lowestPrec)
+	}
+	p.expect(lexer.SEMICOLON)
+	return decl
+}
+
+// parseType — имя типа: ключевое слово INT или любой идентификатор
+// (пользовательский тип). Допустимость имени — задача sema, не парсера.
+func (p *Parser) parseType() string {
+	switch p.cur.Type {
+	case lexer.INT, lexer.IDENT:
+		tok := p.cur
+		p.nextToken()
+		return tok.Literal
+	default:
+		p.fail(fmt.Sprintf("expected type name, got %s %q", p.cur.Type, p.cur.Literal))
+		return ""
+	}
 }
 
 // parseStatements читает операторы до терминатора блока (END_*, ELSE, EOF).

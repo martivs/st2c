@@ -1,7 +1,8 @@
 Program(Example)
-  VarDecl(x : INT)
-  VarDecl(y : INT)
-  VarDecl(sum : INT)
+  VarBlock(VAR)
+    VarDecl(x : INT)
+    VarDecl(y : INT)
+    VarDecl(sum : INT)
   Assign
     Target:
       Ident(x)

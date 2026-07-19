@@ -1,7 +1,8 @@
 Program(NestedForInIf)
-  VarDecl(x : INT)
-  VarDecl(i : INT)
-  VarDecl(total : INT)
+  VarBlock(VAR)
+    VarDecl(x : INT)
+    VarDecl(i : INT)
+    VarDecl(total : INT)
   Assign
     Target:
       Ident(x)

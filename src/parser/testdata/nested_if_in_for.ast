@@ -1,7 +1,8 @@
 Program(NestedIfInFor)
-  VarDecl(i : INT)
-  VarDecl(sum : INT)
-  VarDecl(flag : INT)
+  VarBlock(VAR)
+    VarDecl(i : INT)
+    VarDecl(sum : INT)
+    VarDecl(flag : INT)
   Assign
     Target:
       Ident(sum)

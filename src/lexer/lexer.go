@@ -27,13 +27,20 @@ const (
 	NE        // <>
 	COLON     // :
 	SEMICOLON // ;
+	COMMA     // ,
 	LPAREN    // (
 	RPAREN    // )
 
 	PROGRAM
 	END_PROGRAM
 	VAR
+	VAR_INPUT
+	VAR_OUTPUT
+	VAR_IN_OUT
+	VAR_TEMP
 	END_VAR
+	CONSTANT
+	RETAIN
 	INT
 	IF
 	THEN
@@ -54,7 +61,7 @@ var tokenNames = map[TokenType]string{
 	IDENT: "IDENT", INT_LIT: "INT_LIT",
 	ASSIGN: ":=", PLUS: "+", MINUS: "-", STAR: "*", SLASH: "/",
 	GT: ">", LT: "<", EQ: "=", LE: "<=", GE: ">=", NE: "<>",
-	COLON: ":", SEMICOLON: ";",
+	COLON: ":", SEMICOLON: ";", COMMA: ",",
 	LPAREN: "(", RPAREN: ")",
 }
 
@@ -73,7 +80,9 @@ func (t TokenType) String() string {
 
 var keywords = map[string]TokenType{
 	"PROGRAM": PROGRAM, "END_PROGRAM": END_PROGRAM,
-	"VAR": VAR, "END_VAR": END_VAR, "INT": INT,
+	"VAR": VAR, "VAR_INPUT": VAR_INPUT, "VAR_OUTPUT": VAR_OUTPUT,
+	"VAR_IN_OUT": VAR_IN_OUT, "VAR_TEMP": VAR_TEMP, "END_VAR": END_VAR,
+	"CONSTANT": CONSTANT, "RETAIN": RETAIN, "INT": INT,
 	"IF": IF, "THEN": THEN, "ELSE": ELSE, "END_IF": END_IF,
 	"FOR": FOR, "TO": TO, "BY": BY, "DO": DO, "END_FOR": END_FOR,
 }
@@ -134,6 +143,9 @@ func (l *Lexer) NextToken() Token {
 	case ch == ';':
 		l.pos++
 		return Token{Type: SEMICOLON, Literal: ";", Line: line, Col: col}
+	case ch == ',':
+		l.pos++
+		return Token{Type: COMMA, Literal: ",", Line: line, Col: col}
 	case ch == '(':
 		l.pos++
 		return Token{Type: LPAREN, Literal: "(", Line: line, Col: col}

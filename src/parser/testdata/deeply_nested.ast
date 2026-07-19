@@ -1,7 +1,8 @@
 Program(DeeplyNested)
-  VarDecl(i : INT)
-  VarDecl(j : INT)
-  VarDecl(acc : INT)
+  VarBlock(VAR)
+    VarDecl(i : INT)
+    VarDecl(j : INT)
+    VarDecl(acc : INT)
   Assign
     Target:
       Ident(acc)

@@ -82,17 +82,17 @@ func (o Op) String() string {
 
 // Program — корень дерева: всё, что между PROGRAM и END_PROGRAM.
 type Program struct {
-	Name string
-	Vars []*VarDecl
-	Body []Statement
-	Tok  lexer.Token // токен PROGRAM
+	Name      string
+	VarBlocks []*VarBlock
+	Body      []Statement
+	Tok       lexer.Token // токен PROGRAM
 }
 
 func (p *Program) Line() int { return p.Tok.Line }
 func (p *Program) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Program(%s)\n", p.Name)
-	for _, v := range p.Vars {
+	for _, v := range p.VarBlocks {
 		indent(&b, v.String(), 1)
 	}
 	for _, s := range p.Body {
@@ -101,15 +101,81 @@ func (p *Program) String() string {
 	return b.String()
 }
 
-// VarDecl — одно объявление переменной: `x : INT;`. Тип в MVP всегда INT,
-// поэтому отдельно его не храним.
-type VarDecl struct {
-	Name string
-	Tok  lexer.Token // токен-идентификатор
+// VarKind — вид блока объявлений. Для функций и функциональных блоков виды
+// блоков задают интерфейс POU (входы/выходы), поэтому это данные, а не
+// синтаксический шум.
+type VarKind int
+
+const (
+	VarPlain  VarKind = iota // VAR
+	VarInput                 // VAR_INPUT
+	VarOutput                // VAR_OUTPUT
+	VarInOut                 // VAR_IN_OUT
+	VarTemp                  // VAR_TEMP
+)
+
+var varKindNames = map[VarKind]string{
+	VarPlain: "VAR", VarInput: "VAR_INPUT", VarOutput: "VAR_OUTPUT",
+	VarInOut: "VAR_IN_OUT", VarTemp: "VAR_TEMP",
 }
 
-func (v *VarDecl) Line() int      { return v.Tok.Line }
-func (v *VarDecl) String() string { return fmt.Sprintf("VarDecl(%s : INT)", v.Name) }
+func (k VarKind) String() string {
+	if s, ok := varKindNames[k]; ok {
+		return s
+	}
+	return "UNKNOWN"
+}
+
+// VarBlock — один блок объявлений `VAR* ... END_VAR`. Блоков в POU может быть
+// несколько и разных видов; необязательные квалификаторы CONSTANT/RETAIN —
+// флаги блока.
+type VarBlock struct {
+	Kind     VarKind
+	Constant bool // VAR CONSTANT
+	Retain   bool // VAR RETAIN
+	Decls    []*VarDecl
+	Tok      lexer.Token // токен VAR*
+}
+
+func (v *VarBlock) Line() int { return v.Tok.Line }
+func (v *VarBlock) String() string {
+	var b strings.Builder
+	b.WriteString("VarBlock(")
+	b.WriteString(v.Kind.String())
+	if v.Constant {
+		b.WriteString(" CONSTANT")
+	}
+	if v.Retain {
+		b.WriteString(" RETAIN")
+	}
+	b.WriteString(")\n")
+	for _, d := range v.Decls {
+		indent(&b, d.String(), 1)
+	}
+	return b.String()
+}
+
+// VarDecl — одно объявление: `a, b, c : INT;` или `x : INT := 5;`.
+// TypeName — имя типа как записано (встроенный или пользовательский —
+// решает sema, не парсер). Init == nil, если инициализатора нет.
+type VarDecl struct {
+	Names    []string
+	TypeName string
+	Init     Expression
+	Tok      lexer.Token // токен первого имени
+}
+
+func (v *VarDecl) Line() int { return v.Tok.Line }
+func (v *VarDecl) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "VarDecl(%s : %s)", strings.Join(v.Names, ", "), v.TypeName)
+	if v.Init != nil {
+		b.WriteByte('\n')
+		indent(&b, "Init:", 1)
+		indent(&b, v.Init.String(), 2)
+	}
+	return b.String()
+}
 
 // ---------------------------------------------------------------------------
 // Операторы (реализуют Statement)
