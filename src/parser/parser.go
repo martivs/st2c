@@ -153,13 +153,25 @@ func (p *Parser) parseStatement() ast.Statement {
 	}
 }
 
-// parseAssign: IDENT := expression ;
+// parseAssign: lvalue := expression ;
+//
+// Цель разбирается как primary-выражение; допустимый lvalue пока только
+// идентификатор (литерал/скобки слева → ошибка). Когда parsePrimary научится
+// постфиксам (`arr[i]`, `fb.out`), они станут целями без смены формы AST.
 func (p *Parser) parseAssign() ast.Statement {
-	name := p.expect(lexer.IDENT)
+	tok := p.cur
+	target := p.parsePrimary()
+	if p.err != nil {
+		return nil
+	}
+	if _, ok := target.(*ast.Identifier); !ok {
+		p.err = fmt.Errorf("line %d: invalid assignment target %q", tok.Line, tok.Literal)
+		return nil
+	}
 	p.expect(lexer.ASSIGN)
 	value := p.parseExpression(lowestPrec)
 	p.expect(lexer.SEMICOLON)
-	return &ast.AssignStatement{Target: name.Literal, Value: value, Tok: name}
+	return &ast.AssignStatement{Target: target, Value: value, Tok: tok}
 }
 
 // parseIf: IF expression THEN {statement} [ELSE {statement}] END_IF ;?
@@ -181,7 +193,8 @@ func (p *Parser) parseIf() ast.Statement {
 	return stmt
 }
 
-// parseFor: FOR IDENT := expression TO expression DO {statement} END_FOR ;?
+// parseFor: FOR IDENT := expression TO expression [BY expression] DO
+//           {statement} END_FOR ;?
 func (p *Parser) parseFor() ast.Statement {
 	tok := p.expect(lexer.FOR)
 	name := p.expect(lexer.IDENT)
@@ -189,9 +202,18 @@ func (p *Parser) parseFor() ast.Statement {
 	start := p.parseExpression(lowestPrec)
 	p.expect(lexer.TO)
 	end := p.parseExpression(lowestPrec)
-	p.expect(lexer.DO)
 
-	stmt := &ast.ForStatement{Var: name.Literal, Start: start, End: end, Tok: tok}
+	stmt := &ast.ForStatement{
+		Var:   &ast.Identifier{Name: name.Literal, Tok: name},
+		Start: start,
+		End:   end,
+		Tok:   tok,
+	}
+	if p.curIs(lexer.BY) {
+		p.nextToken()
+		stmt.Step = p.parseExpression(lowestPrec)
+	}
+	p.expect(lexer.DO)
 	stmt.Body = p.parseStatements()
 
 	p.expect(lexer.END_FOR)

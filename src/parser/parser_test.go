@@ -165,6 +165,87 @@ func TestExpressionStructure(t *testing.T) {
 	}
 }
 
+// TestForBy: необязательный шаг `BY` в FOR — узел Step в дереве; без BY
+// секции Step нет (nil → шаг 1).
+func TestForBy(t *testing.T) {
+	tests := []struct {
+		name string
+		stmt string
+		want string // String() оператора FOR, без завершающего \n
+	}{
+		{
+			name: "с шагом BY",
+			stmt: "FOR i := 1 TO 10 BY 2 DO sum := sum + i; END_FOR",
+			want: `For(i)
+  Start:
+    Int(1)
+  End:
+    Int(10)
+  Step:
+    Int(2)
+  Do:
+    Assign
+      Target:
+        Ident(sum)
+      Value:
+        Binary(+)
+          Ident(sum)
+          Ident(i)`,
+		},
+		{
+			name: "шаг-выражение со знаком",
+			stmt: "FOR i := 10 TO 1 BY -1 DO sum := i; END_FOR",
+			want: `For(i)
+  Start:
+    Int(10)
+  End:
+    Int(1)
+  Step:
+    Unary(-)
+      Int(1)
+  Do:
+    Assign
+      Target:
+        Ident(sum)
+      Value:
+        Ident(i)`,
+		},
+		{
+			name: "без BY секции Step нет",
+			stmt: "FOR i := 1 TO 3 DO sum := i; END_FOR",
+			want: `For(i)
+  Start:
+    Int(1)
+  End:
+    Int(3)
+  Do:
+    Assign
+      Target:
+        Ident(sum)
+      Value:
+        Ident(i)`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "PROGRAM P\n" + tc.stmt + "\nEND_PROGRAM"
+			p := parser.New(lexer.New(src))
+			prog, err := p.ParseProgram()
+			if err != nil {
+				t.Fatalf("parse error: %v", err)
+			}
+			forStmt, ok := prog.Body[0].(*ast.ForStatement)
+			if !ok {
+				t.Fatalf("ожидался ForStatement, получен %T", prog.Body[0])
+			}
+			got := strings.TrimRight(forStmt.String(), "\n")
+			if got != tc.want {
+				t.Errorf("дерево FOR:\n--- got ---\n%s\n--- want ---\n%s", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestParseErrors: вход → подстрока ожидаемого сообщения об ошибке
 // (включая номер строки).
 func TestParseErrors(t *testing.T) {
@@ -212,6 +293,21 @@ func TestParseErrors(t *testing.T) {
 			name:       "незакрытая скобка",
 			input:      "PROGRAM P\nx := (1 + 2;\nEND_PROGRAM",
 			wantSubstr: `line 2: expected )`,
+		},
+		{
+			name:       "литерал слева от присваивания",
+			input:      "PROGRAM P\n5 := x;\nEND_PROGRAM",
+			wantSubstr: `line 2: unexpected token INT_LIT "5" at statement start`,
+		},
+		{
+			name:       "оператор вместо := после цели присваивания",
+			input:      "PROGRAM P\nx + 1;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected :=, got + "+"`,
+		},
+		{
+			name:       "BY без выражения шага",
+			input:      "PROGRAM P\nFOR i := 1 TO 5 BY DO\ni := 1;\nEND_FOR\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got DO`,
 		},
 	}
 	for _, tc := range tests {

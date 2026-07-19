@@ -2,8 +2,11 @@ Program(DeeplyNested)
   VarDecl(i : INT)
   VarDecl(j : INT)
   VarDecl(acc : INT)
-  Assign(acc :=)
-    Int(0)
+  Assign
+    Target:
+      Ident(acc)
+    Value:
+      Int(0)
   For(i)
     Start:
       Int(1)
@@ -30,17 +33,26 @@ Program(DeeplyNested)
                     Ident(i)
                     Ident(j)
                 Then:
-                  Assign(acc :=)
-                    Binary(+)
+                  Assign
+                    Target:
                       Ident(acc)
-                      Int(1)
+                    Value:
+                      Binary(+)
+                        Ident(acc)
+                        Int(1)
                 Else:
-                  Assign(acc :=)
-                    Binary(+)
+                  Assign
+                    Target:
                       Ident(acc)
-                      Int(2)
+                    Value:
+                      Binary(+)
+                        Ident(acc)
+                        Int(2)
             Else:
-              Assign(acc :=)
-                Binary(-)
+              Assign
+                Target:
                   Ident(acc)
-                  Int(1)
+                Value:
+                  Binary(-)
+                    Ident(acc)
+                    Int(1)

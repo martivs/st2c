@@ -2,10 +2,16 @@ Program(NestedForInIf)
   VarDecl(x : INT)
   VarDecl(i : INT)
   VarDecl(total : INT)
-  Assign(x :=)
-    Int(7)
-  Assign(total :=)
-    Int(0)
+  Assign
+    Target:
+      Ident(x)
+    Value:
+      Int(7)
+  Assign
+    Target:
+      Ident(total)
+    Value:
+      Int(0)
   If
     Cond:
       Binary(>)
@@ -18,10 +24,16 @@ Program(NestedForInIf)
         End:
           Ident(x)
         Do:
-          Assign(total :=)
-            Binary(+)
+          Assign
+            Target:
               Ident(total)
-              Ident(i)
+            Value:
+              Binary(+)
+                Ident(total)
+                Ident(i)
     Else:
-      Assign(total :=)
-        Int(0)
+      Assign
+        Target:
+          Ident(total)
+        Value:
+          Int(0)

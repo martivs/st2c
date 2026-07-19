@@ -115,19 +115,24 @@ func (v *VarDecl) String() string { return fmt.Sprintf("VarDecl(%s : INT)", v.Na
 // Операторы (реализуют Statement)
 // ---------------------------------------------------------------------------
 
-// AssignStatement — присваивание: `Target := Value;`.
+// AssignStatement — присваивание: `Target := Value;`. Target — выражение-
+// lvalue: пока это всегда *Identifier, позже сюда лягут IndexExpr/MemberExpr
+// (`arr[i] :=`, `fb.out :=`) без смены формы узла.
 type AssignStatement struct {
-	Target string
+	Target Expression
 	Value  Expression
-	Tok    lexer.Token // токен-идентификатор слева
+	Tok    lexer.Token // первый токен цели
 }
 
 func (s *AssignStatement) statementNode() {}
 func (s *AssignStatement) Line() int      { return s.Tok.Line }
 func (s *AssignStatement) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Assign(%s :=)\n", s.Target)
-	indent(&b, s.Value.String(), 1)
+	b.WriteString("Assign\n")
+	indent(&b, "Target:", 1)
+	indent(&b, s.Target.String(), 2)
+	indent(&b, "Value:", 1)
+	indent(&b, s.Value.String(), 2)
 	return b.String()
 }
 
@@ -160,11 +165,14 @@ func (s *IfStatement) String() string {
 	return b.String()
 }
 
-// ForStatement — `FOR Var := Start TO End DO Body END_FOR`.
+// ForStatement — `FOR Var := Start TO End [BY Step] DO Body END_FOR`.
+// Var по IEC — простой идентификатор; хранится узлом *Identifier ради
+// позиции. Step == nil → шаг 1.
 type ForStatement struct {
-	Var   string
+	Var   *Identifier
 	Start Expression
 	End   Expression
+	Step  Expression
 	Body  []Statement
 	Tok   lexer.Token // токен FOR
 }
@@ -173,11 +181,15 @@ func (s *ForStatement) statementNode() {}
 func (s *ForStatement) Line() int      { return s.Tok.Line }
 func (s *ForStatement) String() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "For(%s)\n", s.Var)
+	fmt.Fprintf(&b, "For(%s)\n", s.Var.Name)
 	indent(&b, "Start:", 1)
 	indent(&b, s.Start.String(), 2)
 	indent(&b, "End:", 1)
 	indent(&b, s.End.String(), 2)
+	if s.Step != nil {
+		indent(&b, "Step:", 1)
+		indent(&b, s.Step.String(), 2)
+	}
 	indent(&b, "Do:", 1)
 	for _, st := range s.Body {
 		indent(&b, st.String(), 2)

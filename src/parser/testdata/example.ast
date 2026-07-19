@@ -2,30 +2,48 @@ Program(Example)
   VarDecl(x : INT)
   VarDecl(y : INT)
   VarDecl(sum : INT)
-  Assign(x :=)
-    Int(10)
-  Assign(y :=)
-    Int(3)
-  Assign(sum :=)
-    Int(0)
+  Assign
+    Target:
+      Ident(x)
+    Value:
+      Int(10)
+  Assign
+    Target:
+      Ident(y)
+    Value:
+      Int(3)
+  Assign
+    Target:
+      Ident(sum)
+    Value:
+      Int(0)
   For(x)
     Start:
       Int(1)
     End:
       Int(5)
     Do:
-      Assign(sum :=)
-        Binary(+)
+      Assign
+        Target:
           Ident(sum)
-          Ident(x)
+        Value:
+          Binary(+)
+            Ident(sum)
+            Ident(x)
   If
     Cond:
       Binary(>)
         Ident(sum)
         Int(10)
     Then:
-      Assign(y :=)
-        Int(1)
+      Assign
+        Target:
+          Ident(y)
+        Value:
+          Int(1)
     Else:
-      Assign(y :=)
-        Int(0)
+      Assign
+        Target:
+          Ident(y)
+        Value:
+          Int(0)

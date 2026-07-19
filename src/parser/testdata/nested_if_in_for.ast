@@ -2,10 +2,16 @@ Program(NestedIfInFor)
   VarDecl(i : INT)
   VarDecl(sum : INT)
   VarDecl(flag : INT)
-  Assign(sum :=)
-    Int(0)
-  Assign(flag :=)
-    Int(0)
+  Assign
+    Target:
+      Ident(sum)
+    Value:
+      Int(0)
+  Assign
+    Target:
+      Ident(flag)
+    Value:
+      Int(0)
   For(i)
     Start:
       Int(1)
@@ -18,12 +24,18 @@ Program(NestedIfInFor)
             Ident(i)
             Int(5)
         Then:
-          Assign(sum :=)
-            Binary(+)
+          Assign
+            Target:
               Ident(sum)
-              Ident(i)
+            Value:
+              Binary(+)
+                Ident(sum)
+                Ident(i)
         Else:
-          Assign(flag :=)
-            Binary(+)
+          Assign
+            Target:
               Ident(flag)
-              Int(1)
+            Value:
+              Binary(+)
+                Ident(flag)
+                Int(1)
