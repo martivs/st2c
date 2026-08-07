@@ -1,5 +1,7 @@
-// Golden-тесты парсера: testdata/*.st разбирается, prog.String() сравнивается
-// с эталоном testdata/*.ast. Эталоны перегенерируются флагом -update:
+// Golden-тесты парсера: examples/<имя>.st разбирается, String() сравнивается
+// с эталоном testdata/<имя>.ast. Корпус .st един и живёт в examples/
+// (решение 9 плана 2026-08-07), множество тестов задают сами эталоны:
+// glob по testdata/*.ast. Эталоны перегенерируются флагом -update:
 //
 //	go test ./src/parser -update
 //
@@ -40,17 +42,17 @@ func parseOneProgram(t *testing.T, src string) *ast.Program {
 }
 
 func TestGolden(t *testing.T) {
-	stFiles, err := filepath.Glob(filepath.Join("testdata", "*.st"))
+	astFiles, err := filepath.Glob(filepath.Join("testdata", "*.ast"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(stFiles) == 0 {
-		t.Fatal("нет файлов testdata/*.st")
+	if len(astFiles) == 0 {
+		t.Fatal("нет эталонов testdata/*.ast")
 	}
-	for _, stPath := range stFiles {
-		name := strings.TrimSuffix(filepath.Base(stPath), ".st")
+	for _, goldenPath := range astFiles {
+		name := strings.TrimSuffix(filepath.Base(goldenPath), ".ast")
 		t.Run(name, func(t *testing.T) {
-			src, err := os.ReadFile(stPath)
+			src, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".st"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -61,7 +63,6 @@ func TestGolden(t *testing.T) {
 			}
 			got := sf.String()
 
-			goldenPath := filepath.Join("testdata", name+".ast")
 			if *update {
 				if err := os.WriteFile(goldenPath, []byte(got), 0o644); err != nil {
 					t.Fatal(err)

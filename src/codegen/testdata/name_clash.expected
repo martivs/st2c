@@ -1,0 +1,9 @@
+switch=10
+default=20
+static=30
+struct=1
+self=2
+__end=3
+__step=4
+i=3
+total=82

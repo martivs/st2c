@@ -1,31 +1,35 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
 
+	"st2c/src/codegen"
 	"st2c/src/lexer"
 	"st2c/src/parser"
 	"st2c/src/sema"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		log.Fatal("usage: st2c <file.st>")
+	log.SetFlags(0)
+	out := flag.String("o", "", "файл C-вывода (по умолчанию stdout)")
+	withMain := flag.Bool("main", false, "дописать драйвер main() — файл самодостаточен для gcc")
+	scans := flag.Int("scans", 1, "сколько раз драйвер вызывает _step (только с -main)")
+	dumpAST := flag.Bool("dump-ast", false, "печатать AST вместо генерации C")
+	flag.Parse()
+	if flag.NArg() != 1 {
+		log.Fatal("usage: st2c [-o out.c] [-main] [-scans N] [-dump-ast] <file.st>")
 	}
 
-	data, err := os.ReadFile(os.Args[1])
+	data, err := os.ReadFile(flag.Arg(0))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("ST source loaded: %d bytes\n\n", len(data))
-
-	// Этап 2: лексер → парсер → печать AST.
-	// Лексер одноразовый (pull-модель), поэтому вывод потока токенов и
-	// разбор в дерево — взаимоисключающие. Печать токенов см. в git-истории
-	// Этапа 1.
+	// Конвейер: лексер → парсер → sema → codegen. Лексер одноразовый
+	// (pull-модель); печать потока токенов Этапа 1 — в git-истории.
 	p := parser.New(lexer.New(string(data)))
 	sf, err := p.ParseSourceFile()
 	if err != nil {
@@ -41,7 +45,23 @@ func main() {
 		os.Exit(1)
 	}
 
-	for _, pou := range sf.POUs {
-		fmt.Print(pou.String())
+	if *dumpAST {
+		fmt.Printf("ST source loaded: %d bytes\n\n", len(data))
+		for _, pou := range sf.POUs {
+			fmt.Print(pou.String())
+		}
+		return
 	}
+
+	code, err := codegen.Generate(sf, codegen.Options{Main: *withMain, Scans: *scans})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if *out != "" {
+		if err := os.WriteFile(*out, []byte(code), 0o644); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	fmt.Print(code)
 }

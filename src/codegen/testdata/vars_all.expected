@@ -1,0 +1,9 @@
+LIMIT=100
+STEP_SIZE=3
+saved=-2
+a=7
+b=7
+c=7
+result=119
+scratch=21
+untouched=0
