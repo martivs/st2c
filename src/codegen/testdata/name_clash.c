@@ -34,7 +34,7 @@ void NameClash_step(NameClash *self) {
     self->total = ((((((self->st_switch + self->st_default) + self->st_static) + self->st_struct) + self->st_self) + self->st___end) + self->st___step);
     {
         int32_t __i0 = 1, __end0 = 3, __step0 = 1;
-        for (; __step0 >= 0 ? __i0 <= __end0 : __i0 >= __end0; __i0 += __step0) {
+        for (; __i0 <= __end0; __i0 += __step0) {
             self->i = (int16_t)__i0;
             self->total = (self->total + self->st___step);
         }

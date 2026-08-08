@@ -354,13 +354,31 @@ func (g *gen) stmt(s ast.Statement) error {
 	}
 }
 
+// constStepSign — знак шага FOR, когда он известен без вычисления: шаг
+// опущен (→ 1), литерал, унарный минус над литералом. Общей свёртки констант
+// в проекте нет (долг), поэтому, например, BY -(1) остаётся «неизвестным».
+func constStepSign(e ast.Expression) (neg bool, ok bool) {
+	switch e := e.(type) {
+	case nil:
+		return false, true
+	case *ast.IntLiteral:
+		return e.Value < 0, true
+	case *ast.UnaryExpr:
+		if lit, isLit := e.Operand.(*ast.IntLiteral); isLit && e.Op == ast.NEG {
+			return lit.Value > 0, true
+		}
+	}
+	return false, false
+}
+
 // forStmt — FOR по решению 6. Счётчик и границы — во временных типа шире
 // переменной цикла: границы вычисляются один раз до входа (семантика IEC), а
 // прибавление шага у границы диапазона INT не переполняется (наивный int16_t
 // давал бы бесконечный цикл на 32767). Переменная цикла получает копию
 // счётчика в начале каждой итерации; изменение её в теле на число итераций
 // не влияет (по IEC так нельзя, диагностики нет — долг). Направление —
-// тернарником; свёртка при константном шаге — этап 2.
+// тернарником по знаку шага; при константном шаге тернарник свёрнут в
+// <= / >= (шаг 0 идёт по ветке >= 0 — как и в тернарнике).
 func (g *gen) forStmt(s *ast.ForStatement) error {
 	vi := g.cur.vars[strings.ToUpper(s.Var.Name)]
 	if vi == nil {
@@ -396,7 +414,15 @@ func (g *gen) forStmt(s *ast.ForStatement) error {
 	g.linef("{")
 	g.ind++
 	g.linef("%s %s = %s, %s = %s, %s = %s;", wide, i, start, e, end, st, step)
-	g.linef("for (; %s >= 0 ? %s <= %s : %s >= %s; %s += %s) {", st, i, e, i, e, i, st)
+	cond := fmt.Sprintf("%s >= 0 ? %s <= %s : %s >= %s", st, i, e, i, e)
+	if neg, known := constStepSign(s.Step); known {
+		if neg {
+			cond = fmt.Sprintf("%s >= %s", i, e)
+		} else {
+			cond = fmt.Sprintf("%s <= %s", i, e)
+		}
+	}
+	g.linef("for (; %s; %s += %s) {", cond, i, st)
 	g.ind++
 	g.linef("self->%s = (%s)%s;", vi.cName, narrow, i)
 	if err := g.stmts(s.Body); err != nil {

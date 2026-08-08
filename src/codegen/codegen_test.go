@@ -37,12 +37,18 @@ import (
 var update = flag.Bool("update", false, "перегенерировать golden-эталоны testdata/*.c")
 
 // goldenExamples — имена файлов examples/*.st, для которых есть эталоны.
-// Этап 1: объявления, присваивания, выражения, IF, FOR. Этап 2 добавит
-// for_edge и четыре старых примера.
+// Этап 1: объявления, присваивания, выражения, IF, FOR. Этап 2: for_edge
+// (регрессия на границы INT — без широкого счётчика зависает, ловится
+// таймаутом) и четыре старых примера.
 var goldenExamples = []string{
 	"vars_all",
 	"expr_all",
 	"name_clash",
+	"example",
+	"nested_if_in_for",
+	"nested_for_in_if",
+	"deeply_nested",
+	"for_edge",
 }
 
 // runTimeout — предел на запуск собранного бинаря: режим отказа сломанного
