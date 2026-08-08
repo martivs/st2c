@@ -178,17 +178,17 @@ func newProgInfo(p *ast.Program) (*progInfo, error) {
 	for _, blk := range p.VarBlocks {
 		for _, d := range blk.Decls {
 			for _, name := range d.Names {
-				cn, err := mapName(name, d.Tok)
+				cn, err := mapName(name.Name, name.Tok)
 				if err != nil {
 					return nil, err
 				}
 				if prev, dup := used[cn]; dup {
 					return nil, fmt.Errorf("line %d:%d: codegen: renamed %q collides with %q (both map to C name %q)",
-						d.Tok.Line, d.Tok.Col, name, prev, cn)
+						name.Tok.Line, name.Tok.Col, name.Name, prev, cn)
 				}
-				used[cn] = name
-				vi := &varInfo{stName: name, cName: cn, stType: d.TypeName, tok: d.Tok}
-				info.vars[strings.ToUpper(name)] = vi
+				used[cn] = name.Name
+				vi := &varInfo{stName: name.Name, cName: cn, stType: d.TypeName, tok: name.Tok}
+				info.vars[strings.ToUpper(name.Name)] = vi
 				info.order = append(info.order, vi)
 			}
 		}
@@ -243,7 +243,7 @@ func (g *gen) emitInit(info *progInfo) error {
 	for _, blk := range info.p.VarBlocks {
 		for _, d := range blk.Decls {
 			for _, name := range d.Names {
-				vi := info.vars[strings.ToUpper(name)]
+				vi := info.vars[strings.ToUpper(name.Name)]
 				if d.Init == nil {
 					g.linef("self->%s = 0;", vi.cName)
 					continue

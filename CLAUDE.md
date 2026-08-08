@@ -29,7 +29,7 @@ CLI-флаги `st2c`: `-o <file>` (по умолчанию stdout), `-main` (д
 драйвер), `-scans N` (сколько раз драйвер зовёт `_step`, по умолчанию 1),
 `-dump-ast` (печать дерева вместо генерации).
 
-## Статус: codegen готов (MVP) — этап 2 плана 2026-08-07 закрыт
+## Статус: этап 3a плана 2026-08-07 закрыт (токены и узлы AST для FUNCTION/ФБ)
 
 Конвейер: `lexer` → `parser` (строит `ast`) → `sema` → `codegen`.
 
@@ -90,14 +90,20 @@ git-истории, а не в `main`.
 
 **`src/lexer/lexer.go`**
 - `TokenType` (iota): `EOF`, `ILLEGAL`, `IDENT`, `INT_LIT`, операторы
-  (`+ - * / > < = <= >= <>`, `:=`), разделители (`: ; , ( )`), 20 ключевых
-  слов (включая `BY`, семейство `VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT/VAR_TEMP`,
-  квалификаторы `CONSTANT`/`RETAIN`)
+  (`+ - * / > < = <= >= <>`, `:=`, `=>` (`ARROW`)), разделители
+  (`: ; , ( )`, `.` (`DOT`)), 24 ключевых слова (включая `BY`, семейство
+  `VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT/VAR_TEMP`, квалификаторы
+  `CONSTANT`/`RETAIN`, `FUNCTION`/`END_FUNCTION`,
+  `FUNCTION_BLOCK`/`END_FUNCTION_BLOCK`)
 - `Token{Type, Literal, Line, Col}` — позиция 1-based, колонки в рунах
   (`lineStart` в лексере, сброс на `\n`)
 - `NextToken()` — посимвольный разбор: пробелы/переносы, комментарии,
   двухсимвольные операторы через `peek()`, идентификаторы → ключевые слова
-  (case-insensitive), целые литералы
+  (case-insensitive), целые литералы. **Порядок веток `switch` значим**:
+  ветка двухсимвольного оператора обязана стоять до односимвольного с тем же
+  первым символом (`=>` до `=`, `<=`/`<>` до `<`) — Go проверяет `case` по
+  порядку, при обратном порядке `=>` молча разберётся как `=` и `>`
+  (зафиксировано тестом «arrow vs eq and gt»)
 - Комментарии: блочные `(* ... *)` с вложенностью (3-я ред. IEC) и строчные
   `// ...`; незакрытый `(*` → `ILLEGAL`-токен с позицией начала; одиночные
   `(` и `/` остаются `LPAREN`/`SLASH`
@@ -108,20 +114,27 @@ git-истории, а не в `main`.
 - Интерфейсы `Node` (`String()`, `Line()`), `Statement`, `Expression`, `POU`;
   маркерные методы (`statementNode()` и т.п.) разделяют категории узлов на
   уровне типов
-- Корень — `SourceFile{POUs []POU}`; `POU` пока реализует только `Program` —
-  `FUNCTION`/`FUNCTION_BLOCK` лягут рядом без смены корня
+- Корень — `SourceFile{POUs []POU}`; `POU` реализуют `Program`, `Function`
+  (`Name, ReturnType string, VarBlocks, Body, Tok`) и `FunctionBlock` (то же
+  без `ReturnType`). Парсер их пока не строит — этап 3b
 - `ast.Op` — собственный enum операций (`ADD … NE`, `NEG`) с `String()`,
   возвращающим исходные символы (`+`, `<=`, `<>`); AST отвязан от
   `lexer.TokenType`
 - Узлы: `Program` (`VarBlocks []*VarBlock`); `VarBlock{Kind VarKind,
   Constant, Retain bool, Decls}` — вид блока (`VAR`/`VAR_INPUT`/…) как данные;
-  `VarDecl{Names []string, TypeName string, Init Expression}` — список имён
-  (`a, b, c : INT;`), тип строкой, необязательный инициализатор
-  (`x : INT := 5;`); `AssignStatement` (`Target Expression` — lvalue, пока
-  всегда `*Identifier`, позже `IndexExpr`/`MemberExpr`); `IfStatement`;
-  `ForStatement` (`Var *Identifier`, `Step Expression`, nil → шаг 1);
-  `Identifier`; `IntLiteral`; `BinaryExpr` (арифметика и сравнения — единый
-  тип, различаются `Op`); `UnaryExpr` (унарный минус; позже `+`/`NOT`)
+  `VarDecl{Names []*Identifier, TypeName string, Init Expression}` — список
+  имён (`a, b, c : INT;`) **узлами с собственными позициями** (иначе sema
+  указывала бы на первое имя списка вместо дубликата), тип строкой,
+  необязательный инициализатор (`x : INT := 5;`); `AssignStatement`
+  (`Target Expression` — lvalue, пока всегда `*Identifier`, позже
+  `IndexExpr`/`MemberExpr`); `IfStatement`; `ForStatement`
+  (`Var *Identifier`, `Step Expression`, nil → шаг 1); `CallStatement`
+  (`Call *CallExpr` — вызов ФБ как оператор); `Identifier`; `IntLiteral`;
+  `BinaryExpr` (арифметика и сравнения — единый тип, различаются `Op`);
+  `UnaryExpr` (унарный минус; позже `+`/`NOT`); `MemberExpr{Base Expression,
+  Member string}` (`inst.Out`); `CallExpr{Callee Expression, Args []*Arg}` и
+  `Arg{Name string, Value Expression, Output bool}` — `Name == ""` для
+  позиционного аргумента, `Output` для формы `name => lvalue`
 - `String()` каждого узла рекурсивно печатает поддерево с отступами (формат
   golden-эталонов); поле `Tok lexer.Token` — якорь позиции
 
@@ -155,7 +168,9 @@ git-истории, а не в `main`.
 - Символьная таблица `map[string]*Symbol` с ключом `strings.ToUpper(name)` —
   идентификаторы по IEC регистронезависимы (`Sum` = `sum`)
 - Проверки: объявленность (ссылки в выражениях, цели присваиваний, переменная
-  `FOR`), дубликаты объявлений (в т.ч. в разном регистре и между блоками),
+  `FOR`), дубликаты объявлений (в т.ч. в разном регистре и между блоками;
+  позиция ошибки — токен самого дублирующего имени, не первого в списке
+  объявления),
   диапазон `INT` −32768..32767 для литералов при известном целевом типе (для
   пользовательских типов не навязывается); `-32768` (NEG+литерал) учитывает
   знак до проверки диапазона
@@ -335,8 +350,9 @@ void Example_step(Example *self) {
 2. ✅ Остаток `IF`/`FOR` в codegen: регрессия `for_edge` (границы `INT`,
    `BY -3`, вложенность), свёртка тернарника при константном шаге,
    golden-эталоны и `.expected` четырёх старых примеров.
-3. ⬜ 3a — лексер/AST для `FUNCTION`/`FUNCTION_BLOCK`/вызовов;
-   3b — парсер POU и вызовов.
+3. ✅ 3a — лексер/AST для `FUNCTION`/`FUNCTION_BLOCK`/вызовов (+ починка
+   позиций имён: `VarDecl.Names []*Identifier`);
+   ⬜ 3b — парсер POU и вызовов.
 4. ⬜ Sema: области видимости, глобальная таблица POU, проверки `FUNCTION`.
 5. ⬜ Codegen `FUNCTION`. 6. ⬜ Sema ФБ. 7. ⬜ Codegen `FUNCTION_BLOCK`.
 

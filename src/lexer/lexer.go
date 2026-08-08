@@ -30,6 +30,8 @@ const (
 	COMMA     // ,
 	LPAREN    // (
 	RPAREN    // )
+	DOT       // .  (доступ к члену: inst.Out)
+	ARROW     // => (привязка выхода: out => y)
 
 	PROGRAM
 	END_PROGRAM
@@ -51,6 +53,10 @@ const (
 	BY
 	DO
 	END_FOR
+	FUNCTION
+	END_FUNCTION
+	FUNCTION_BLOCK
+	END_FUNCTION_BLOCK
 )
 
 // tokenNames — имена типов токенов для печати. Ключевые слова сюда не
@@ -63,6 +69,7 @@ var tokenNames = map[TokenType]string{
 	GT: ">", LT: "<", EQ: "=", LE: "<=", GE: ">=", NE: "<>",
 	COLON: ":", SEMICOLON: ";", COMMA: ",",
 	LPAREN: "(", RPAREN: ")",
+	DOT: ".", ARROW: "=>",
 }
 
 func init() {
@@ -85,6 +92,8 @@ var keywords = map[string]TokenType{
 	"CONSTANT": CONSTANT, "RETAIN": RETAIN, "INT": INT,
 	"IF": IF, "THEN": THEN, "ELSE": ELSE, "END_IF": END_IF,
 	"FOR": FOR, "TO": TO, "BY": BY, "DO": DO, "END_FOR": END_FOR,
+	"FUNCTION": FUNCTION, "END_FUNCTION": END_FUNCTION,
+	"FUNCTION_BLOCK": FUNCTION_BLOCK, "END_FUNCTION_BLOCK": END_FUNCTION_BLOCK,
 }
 
 type Token struct {
@@ -179,9 +188,18 @@ func (l *Lexer) NextToken() Token {
 	case ch == '<':
 		l.pos++
 		return Token{Type: LT, Literal: "<", Line: line, Col: col}
+	// Ветка `=>` обязана стоять ДО ветки `=`: Go проверяет case по порядку,
+	// при обратном порядке `=>` молча разберётся как `=` и `>` (ср. `<=`/`<>`
+	// перед `<` выше).
+	case ch == '=' && l.peek() == '>':
+		l.pos += 2
+		return Token{Type: ARROW, Literal: "=>", Line: line, Col: col}
 	case ch == '=':
 		l.pos++
 		return Token{Type: EQ, Literal: "=", Line: line, Col: col}
+	case ch == '.':
+		l.pos++
+		return Token{Type: DOT, Literal: ".", Line: line, Col: col}
 	case unicode.IsLetter(ch) || ch == '_':
 		return l.readIdent()
 	case unicode.IsDigit(ch):

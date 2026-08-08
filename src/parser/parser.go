@@ -154,11 +154,14 @@ func (p *Parser) parseVarBlock(kind ast.VarKind) *ast.VarBlock {
 // parseVarDecl: IDENT {, IDENT} : type [:= expression] ;
 func (p *Parser) parseVarDecl() *ast.VarDecl {
 	first := p.expect(lexer.IDENT)
-	decl := &ast.VarDecl{Names: []string{first.Literal}, Tok: first}
+	decl := &ast.VarDecl{
+		Names: []*ast.Identifier{{Name: first.Literal, Tok: first}},
+		Tok:   first,
+	}
 	for p.err == nil && p.curIs(lexer.COMMA) {
 		p.nextToken()
 		name := p.expect(lexer.IDENT)
-		decl.Names = append(decl.Names, name.Literal)
+		decl.Names = append(decl.Names, &ast.Identifier{Name: name.Literal, Tok: name})
 	}
 
 	p.expect(lexer.COLON)

@@ -63,13 +63,13 @@ func (c *checker) checkProgram(p *ast.Program) {
 	for _, blk := range p.VarBlocks {
 		for _, d := range blk.Decls {
 			for _, name := range d.Names {
-				key := strings.ToUpper(name)
+				key := strings.ToUpper(name.Name)
 				if prev, ok := c.syms[key]; ok {
-					c.errorf(d.Tok, "duplicate declaration of %q (first declared as %q at line %d)",
-						name, prev.Name, prev.Tok.Line)
+					c.errorf(name.Tok, "duplicate declaration of %q (first declared as %q at line %d)",
+						name.Name, prev.Name, prev.Tok.Line)
 					continue
 				}
-				c.syms[key] = &Symbol{Name: name, TypeName: d.TypeName, Tok: d.Tok}
+				c.syms[key] = &Symbol{Name: name.Name, TypeName: d.TypeName, Tok: name.Tok}
 			}
 		}
 	}

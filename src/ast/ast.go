@@ -131,6 +131,55 @@ func (p *Program) String() string {
 	return b.String()
 }
 
+// Function — POU-функция: `FUNCTION Name : ReturnType ... END_FUNCTION`.
+// По IEC функция не хранит состояния между вызовами; возврат — присваивание
+// имени функции в теле (`Name := expr;`).
+type Function struct {
+	Name       string
+	ReturnType string
+	VarBlocks  []*VarBlock
+	Body       []Statement
+	Tok        lexer.Token // токен FUNCTION
+}
+
+func (f *Function) pouNode()  {}
+func (f *Function) Line() int { return f.Tok.Line }
+func (f *Function) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Function(%s : %s)\n", f.Name, f.ReturnType)
+	for _, v := range f.VarBlocks {
+		indent(&b, v.String(), 1)
+	}
+	for _, s := range f.Body {
+		indent(&b, s.String(), 1)
+	}
+	return b.String()
+}
+
+// FunctionBlock — POU-функциональный блок: `FUNCTION_BLOCK Name ...
+// END_FUNCTION_BLOCK`. В отличие от функции хранит состояние: у ФБ бывают
+// экземпляры (`inst : Counter;`), каждый со своей памятью.
+type FunctionBlock struct {
+	Name      string
+	VarBlocks []*VarBlock
+	Body      []Statement
+	Tok       lexer.Token // токен FUNCTION_BLOCK
+}
+
+func (f *FunctionBlock) pouNode()  {}
+func (f *FunctionBlock) Line() int { return f.Tok.Line }
+func (f *FunctionBlock) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "FunctionBlock(%s)\n", f.Name)
+	for _, v := range f.VarBlocks {
+		indent(&b, v.String(), 1)
+	}
+	for _, s := range f.Body {
+		indent(&b, s.String(), 1)
+	}
+	return b.String()
+}
+
 // VarKind — вид блока объявлений. Для функций и функциональных блоков виды
 // блоков задают интерфейс POU (входы/выходы), поэтому это данные, а не
 // синтаксический шум.
@@ -188,8 +237,10 @@ func (v *VarBlock) String() string {
 // VarDecl — одно объявление: `a, b, c : INT;` или `x : INT := 5;`.
 // TypeName — имя типа как записано (встроенный или пользовательский —
 // решает sema, не парсер). Init == nil, если инициализатора нет.
+// Names — узлы *Identifier, а не строки: у каждого имени своя позиция,
+// иначе sema сообщала бы об ошибке дубликата по первому имени списка.
 type VarDecl struct {
-	Names    []string
+	Names    []*Identifier
 	TypeName string
 	Init     Expression
 	Tok      lexer.Token // токен первого имени
@@ -197,8 +248,12 @@ type VarDecl struct {
 
 func (v *VarDecl) Line() int { return v.Tok.Line }
 func (v *VarDecl) String() string {
+	names := make([]string, len(v.Names))
+	for i, n := range v.Names {
+		names[i] = n.Name
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "VarDecl(%s : %s)", strings.Join(v.Names, ", "), v.TypeName)
+	fmt.Fprintf(&b, "VarDecl(%s : %s)", strings.Join(names, ", "), v.TypeName)
 	if v.Init != nil {
 		b.WriteByte('\n')
 		indent(&b, "Init:", 1)
@@ -293,6 +348,22 @@ func (s *ForStatement) String() string {
 	return b.String()
 }
 
+// CallStatement — вызов функционального блока как оператор:
+// `inst(In := x, Out => y);`. Вызов функции в позиции оператора по IEC
+// не встречается — там вызов живёт внутри выражения (CallExpr).
+type CallStatement struct {
+	Call *CallExpr
+}
+
+func (s *CallStatement) statementNode() {}
+func (s *CallStatement) Line() int      { return s.Call.Line() }
+func (s *CallStatement) String() string {
+	var b strings.Builder
+	b.WriteString("CallStmt\n")
+	indent(&b, s.Call.String(), 1)
+	return b.String()
+}
+
 // ---------------------------------------------------------------------------
 // Выражения (реализуют Expression)
 // ---------------------------------------------------------------------------
@@ -351,6 +422,69 @@ func (e *UnaryExpr) String() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Unary(%s)\n", e.Op)
 	indent(&b, e.Operand.String(), 1)
+	return b.String()
+}
+
+// MemberExpr — доступ к члену: `inst.Out`. База — выражение, а не имя:
+// с приходом массивов экземпляров форма `arr[i].Out` ляжет сюда без смены
+// узла.
+type MemberExpr struct {
+	Base   Expression
+	Member string
+	Tok    lexer.Token // токен `.`
+}
+
+func (e *MemberExpr) expressionNode() {}
+func (e *MemberExpr) Line() int       { return e.Tok.Line }
+func (e *MemberExpr) String() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Member(%s)\n", e.Member)
+	indent(&b, e.Base.String(), 1)
+	return b.String()
+}
+
+// Arg — один аргумент вызова. Name == "" — позиционный (`f(1, 2)`);
+// иначе именованный: `In := expr` (Output == false) либо привязка выхода ФБ
+// `Out => lvalue` (Output == true, Value — цель записи).
+type Arg struct {
+	Name   string
+	Value  Expression
+	Output bool
+}
+
+func (a *Arg) String() string {
+	var b strings.Builder
+	switch {
+	case a.Name == "":
+		b.WriteString("Arg\n")
+	case a.Output:
+		fmt.Fprintf(&b, "Arg(%s =>)\n", a.Name)
+	default:
+		fmt.Fprintf(&b, "Arg(%s :=)\n", a.Name)
+	}
+	indent(&b, a.Value.String(), 1)
+	return b.String()
+}
+
+// CallExpr — вызов: `Add(1, 2)`, `inst(In := x, Out => y)`. Callee —
+// выражение (сейчас *Identifier); различение «функция или экземпляр ФБ» —
+// задача sema, не синтаксиса.
+type CallExpr struct {
+	Callee Expression
+	Args   []*Arg
+	Tok    lexer.Token // токен `(`
+}
+
+func (e *CallExpr) expressionNode() {}
+func (e *CallExpr) Line() int       { return e.Tok.Line }
+func (e *CallExpr) String() string {
+	var b strings.Builder
+	b.WriteString("Call\n")
+	indent(&b, "Callee:", 1)
+	indent(&b, e.Callee.String(), 2)
+	for _, a := range e.Args {
+		indent(&b, a.String(), 1)
+	}
 	return b.String()
 }
 

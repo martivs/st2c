@@ -66,7 +66,14 @@ END_PROGRAM`,
 		{
 			name: "дубликат в списке имён одного объявления",
 			src:  "PROGRAM P\nVAR a, a : INT; END_VAR\nEND_PROGRAM",
-			want: []string{`duplicate declaration of "a"`},
+			want: []string{`line 2:8: duplicate declaration of "a"`},
+		},
+		{
+			// Позиция ошибки — колонка самого дубликата, а не первого имени
+			// объявления (Names хранит []*Identifier с токеном каждого имени).
+			name: "позиция дубликата в списке имён — само имя, не первое в списке",
+			src:  "PROGRAM P\nVAR alpha : INT; END_VAR\nVAR aaa, bbb, alpha : INT; END_VAR\nEND_PROGRAM",
+			want: []string{`line 3:15: duplicate declaration of "alpha" (first declared as "alpha" at line 2)`},
 		},
 		{
 			name: "дубликат между блоками разных видов",

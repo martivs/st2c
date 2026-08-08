@@ -69,6 +69,51 @@ func TestAllTokens(t *testing.T) {
 			},
 		},
 		{
+			name:  "function and function_block keywords",
+			input: "FUNCTION END_FUNCTION FUNCTION_BLOCK END_FUNCTION_BLOCK",
+			want: []expTok{
+				{FUNCTION, "FUNCTION"}, {END_FUNCTION, "END_FUNCTION"},
+				{FUNCTION_BLOCK, "FUNCTION_BLOCK"}, {END_FUNCTION_BLOCK, "END_FUNCTION_BLOCK"},
+				{EOF, ""},
+			},
+		},
+		{
+			// Регрессия на порядок веток в NextToken: ветка `=>` стоит до `=`,
+			// иначе `=>` молча разберётся как `=` и `>`.
+			name:  "arrow vs eq and gt",
+			input: "out => y a = b c > d x=>y p=q r>s g>=h",
+			want: []expTok{
+				{IDENT, "out"}, {ARROW, "=>"}, {IDENT, "y"},
+				{IDENT, "a"}, {EQ, "="}, {IDENT, "b"},
+				{IDENT, "c"}, {GT, ">"}, {IDENT, "d"},
+				{IDENT, "x"}, {ARROW, "=>"}, {IDENT, "y"},
+				{IDENT, "p"}, {EQ, "="}, {IDENT, "q"},
+				{IDENT, "r"}, {GT, ">"}, {IDENT, "s"},
+				{IDENT, "g"}, {GE, ">="}, {IDENT, "h"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "dot in member access",
+			input: "y := inst.Out;",
+			want: []expTok{
+				{IDENT, "y"}, {ASSIGN, ":="},
+				{IDENT, "inst"}, {DOT, "."}, {IDENT, "Out"},
+				{SEMICOLON, ";"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "fb call with named input",
+			input: "slow(step := 1);",
+			want: []expTok{
+				{IDENT, "slow"}, {LPAREN, "("},
+				{IDENT, "step"}, {ASSIGN, ":="}, {INT_LIT, "1"},
+				{RPAREN, ")"}, {SEMICOLON, ";"},
+				{EOF, ""},
+			},
+		},
+		{
 			name:  "comma in name list",
 			input: "a, b, c : INT;",
 			want: []expTok{
