@@ -29,28 +29,33 @@ CLI-флаги `st2c`: `-o <file>` (по умолчанию stdout), `-main` (д
 драйвер), `-scans N` (сколько раз драйвер зовёт `_step`, по умолчанию 1),
 `-dump-ast` (печать дерева вместо генерации).
 
-## Статус: этап 3a плана 2026-08-07 закрыт (токены и узлы AST для FUNCTION/ФБ)
+## Статус: этап 3b плана 2026-08-07 закрыт (парсер POU и вызовов)
 
 Конвейер: `lexer` → `parser` (строит `ast`) → `sema` → `codegen`.
 
 | Этап | Пакет     | Статус   |
 |------|-----------|----------|
 | 1    | `lexer`   | готов    |
-| 2    | `parser`  | готов    |
+| 2    | `parser`  | готов (включая `FUNCTION`/ФБ/вызовы — этап 3b) |
 | 2    | `ast`     | готов    |
-| 2.5  | `sema`    | готов    |
+| 2.5  | `sema`    | готов для `PROGRAM`; `Function`/`FunctionBlock` молча пропускает — этапы 4 и 6 |
 | 3    | `codegen` | готов (MVP: выражения, присваивание, `IF`, `FOR`, драйвер `-main`); `FUNCTION`/ФБ — этапы 5 и 7 |
 
 Все восемь MVP-примеров из `examples/` проходят цепочку ST → C →
 `gcc -std=c99 -Wall -Wextra` → запуск с верными значениями (`vars_all` →
 result=119, `expr_all` → cmp=127, `name_clash` → total=82, `for_edge` →
 up=25 down=22 nested=10 edge=8 — и завершается: регрессия на бесконечный
-цикл у границы `INT`). `FUNCTION`/`FUNCTION_BLOCK` — этапы 3a–7 плана.
+цикл у границы `INT`). Все одиннадцать примеров **разбираются** в AST
+(включая `func_simple`, `fb_counter`, `fb_nested`); семантика и генерация C
+для `FUNCTION`/`FUNCTION_BLOCK` — этапы 4–7 плана.
 
 ### MVP-ограничения языка
 - Только целочисленные переменные (`INT`); имена других типов разбираются
   (`x : MyType;`), но семантика для них не проверяется
-- Конструкции: присваивание, `IF / ELSE`, `FOR ... TO ... [BY ...] DO`
+- Конструкции: присваивание, `IF / ELSE`, `FOR ... TO ... [BY ...] DO`;
+  синтаксически также `FUNCTION`/`FUNCTION_BLOCK`, вызовы `f(1, y := 2)` в
+  выражениях, вызов ФБ как оператор `inst(In := x, Out => y);`, доступ к
+  члену `inst.Out` (разбираются с этапа 3b; sema/codegen — этапы 4–7)
 - Арифметика `+ - * /`, сравнения `= <> < > <= >=`, унарный минус, скобки
 - Вложенность конструкций — любая (рекурсивный спуск даёт её «бесплатно»)
 
@@ -65,8 +70,8 @@ st2c/
 │                             # nested_for_in_if.st, deeply_nested.st,
 │                             # vars_all.st, expr_all.st, name_clash.st,
 │                             # for_edge.st, func_simple.st, fb_counter.st,
-│                             # fb_nested.st (последние три разбираются
-│                             # только с этапа 3b — это ожидаемо)
+│                             # fb_nested.st (разбираются все; последние
+│                             # три исполняются с этапов 5 и 7)
 └── src/
     ├── main.go               # CLI (пакет flag): -o, -main, -scans, -dump-ast
     ├── lexer/lexer.go        # + lexer_test.go (table-driven)
@@ -116,7 +121,7 @@ git-истории, а не в `main`.
   уровне типов
 - Корень — `SourceFile{POUs []POU}`; `POU` реализуют `Program`, `Function`
   (`Name, ReturnType string, VarBlocks, Body, Tok`) и `FunctionBlock` (то же
-  без `ReturnType`). Парсер их пока не строит — этап 3b
+  без `ReturnType`)
 - `ast.Op` — собственный enum операций (`ADD … NE`, `NEG`) с `String()`,
   возвращающим исходные символы (`+`, `<=`, `<>`); AST отвязан от
   `lexer.TokenType`
@@ -141,22 +146,36 @@ git-истории, а не в `main`.
 **`src/parser/parser.go`** — recursive descent:
 - `New(*lexer.Lexer) *Parser`; `ParseSourceFile() (*ast.SourceFile, error)` —
   единственная точка входа: цикл по POU до EOF, диспетчер по стартовому
-  ключевому слову (пока только `PROGRAM`; `FUNCTION`/`FUNCTION_BLOCK` —
-  будущие ветки `switch`); мусор на верхнем уровне → ошибка
+  ключевому слову (`PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`); мусор на верхнем
+  уровне → ошибка
 - Окно из двух токенов (`cur`/`peek`), хелперы `nextToken`/`expect`/`curIs`/`peekIs`
-- Правила: `parseProgram`, `parseVarBlocks` (цикл по семейству `VAR*` через
+- Правила: `parseProgram`, `parseFunction` (`FUNCTION IDENT : type` +
+  VAR-блоки + тело до `END_FUNCTION`; тип возврата через `parseType`),
+  `parseFunctionBlock` (то же без типа возврата, до `END_FUNCTION_BLOCK`),
+  `parseVarBlocks` (цикл по семейству `VAR*` через
   таблицу `varBlockKinds`, квалификаторы `CONSTANT`/`RETAIN`), `parseVarDecl`
   (список имён через запятую, тип, необязательный `:= init`), `parseType`
   (ключевое слово `INT` или любой `IDENT` — пользовательские типы не падают,
-  допустимость проверит sema), `parseStatements`, `parseStatement`,
-  `parseAssign` (цель — primary-lvalue, пока только идентификатор), `parseIf`,
+  допустимость проверит sema), `parseStatements`, `parseStatement`, `parseIf`,
   `parseFor` (необязательный `BY step` перед `DO`)
+- Оператор с идентификатора — `parseAssignOrCall`: сначала postfix-выражение
+  через `parsePrimary`, затем по текущему токену: `CallExpr` + `;` →
+  `CallStatement` (вызов ФБ как оператор); `:=` — присваивание, цель обязана
+  быть `*Identifier` или `*MemberExpr` (`inst.In := 5;`)
 - Выражения — Pratt / precedence climbing: одна `parseExpression(minPrec int)`
   + таблица `prec map[lexer.TokenType]int` (уровни по IEC: `= <>` слабее
   `< > <= >=`, дальше `+ -`, `* /`); левая ассоциативность — правый операнд с
   `pr+1`; `parseUnary` (унарный `-`, рекурсивно) → `parsePrimary` (`IDENT`,
   `INT_LIT`, `( expr )`). **Новый бинарный оператор = по строке в `prec` и
   `binOps`**
+- Постфиксы в `parsePrimary` (этап 3b): после атома цикл по `.` и `(` —
+  `MemberExpr` (`inst.Out`) и `CallExpr`; связывают сильнее унарного минуса
+  (`-f(x)` = `-(f(x))`). Аргументы — `parseCallArgs`/`parseCallArg`:
+  различение по `peek` после `IDENT` — `name := expr` (вход),
+  `name => lvalue` (выход; цель обязана быть `Identifier`/`MemberExpr`,
+  иначе ошибка), иначе позиционное выражение; `f()` без аргументов допустим
+- `isBlockEnd` включает `END_FUNCTION`/`END_FUNCTION_BLOCK` — несовпадение
+  закрывающего слова даёт внятную ошибку `expected END_FUNCTION_BLOCK, got …`
 - Ошибки — **fail-fast**: поле `err`, `expect()`/`fail()` формируют сообщение
   с номером строки; `ParseSourceFile` возвращает первую ошибку
 - `optionalSemicolon()` — необязательный `;` после `END_IF`/`END_FOR`
@@ -266,11 +285,17 @@ void Example_step(Example *self) {
   сами эталоны (glob по ним в парсере, явный список `goldenExamples` в
   codegen).
 - Парсер: golden — `examples/<имя>.st` разбирается, `SourceFile.String()`
-  сверяется с `testdata/<имя>.ast`; эталоны перегенерируются
+  сверяется с `testdata/<имя>.ast` (семь эталонов: четыре старых +
+  `func_simple`, `fb_counter`, `fb_nested` с этапа 3b); эталоны
+  перегенерируются
   `go test ./src/parser -update`, **diff просматривать вручную** (структура
   дерева — приоритеты, ассоциативность — не должна меняться неосознанно).
-  Плюс структурные тесты выражений/`FOR BY`/VAR-блоков и негативные: вход →
-  подстрока сообщения об ошибке с номером строки.
+  Плюс структурные тесты выражений/`FOR BY`/VAR-блоков/постфиксов
+  (`TestPostfix`: член в выражении и как цель присваивания, вложенные вызовы,
+  `-f(x)`, вызов-оператор, `f()`, `=>` в член) и негативные: вход →
+  подстрока сообщения об ошибке с номером строки (в т.ч. незакрытая скобка
+  вызова, `=>` с не-lvalue, `END_FUNCTION` вместо `END_FUNCTION_BLOCK`,
+  вызов-оператор без `;`).
 - Sema: table-driven — вход-программа → ожидаемые подстроки ошибок
   (`line:col`) в порядке следования либо их отсутствие.
 - Codegen (решение 7), два слоя:
@@ -375,8 +400,14 @@ void Example_step(Example *self) {
   диспетчеризацией).
 - `IntLiteral.Value` — `int`; для литералов вне `int64` и типизированных
   литералов понадобится хранить исходную строку.
-- Вызовы функций `f(x, y)` в выражениях: при Pratt `(` после primary — это
-  постфиксный оператор, ляжет в ту же таблицу приоритетов.
+- **Sema слепа к `Function`/`FunctionBlock` (временно, до этапа 4).**
+  `sema.Check` обрабатывает только `*ast.Program` и молча пропускает
+  остальные POU: после этапа 3b функции и ФБ **разбираются, но не
+  проверяются** (необъявленные имена, дубликаты, диапазоны — всё молча
+  проходит). Это ожидаемое состояние по плану, НЕ баг — закрывается этапами
+  4 (функции) и 6 (ФБ); чинить раньше не надо. Codegen такие POU тоже не
+  поддерживает (этапы 5 и 7) — до них `go run ./src` на `func_simple`/`fb_*`
+  падает в генерации, разбор проверять через `-dump-ast`.
 - `a < b < c` разбирается левоассоциативно без предупреждения (зафиксировано
   тестом); отлов «сравнение BOOL с INT» — при выводе типов.
 - Условие `IF` в sema проверяется с целевым типом INT (других типов в MVP

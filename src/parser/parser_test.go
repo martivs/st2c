@@ -181,6 +181,102 @@ func TestExpressionStructure(t *testing.T) {
 	}
 }
 
+// TestPostfix: этап 3b — постфиксы `.` и `(` в выражениях (MemberExpr,
+// CallExpr) и вызов ФБ как оператор (CallStatement). Форма дерева для
+// вызовов и членов сверяется по String().
+func TestPostfix(t *testing.T) {
+	t.Run("член в выражении", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nx := inst.Out + 1;\nEND_PROGRAM")
+		assign := prog.Body[0].(*ast.AssignStatement)
+		want := `Binary(+)
+  Member(Out)
+    Ident(inst)
+  Int(1)`
+		if got := strings.TrimRight(assign.Value.String(), "\n"); got != want {
+			t.Errorf("--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+	})
+	t.Run("член как цель присваивания", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\ninst.In := 5;\nEND_PROGRAM")
+		assign := prog.Body[0].(*ast.AssignStatement)
+		if _, ok := assign.Target.(*ast.MemberExpr); !ok {
+			t.Fatalf("цель: ожидался *ast.MemberExpr, получен %T", assign.Target)
+		}
+	})
+	t.Run("вызов с позиционными и вложенным вызовом", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nx := Add(1, Add(2, 3));\nEND_PROGRAM")
+		assign := prog.Body[0].(*ast.AssignStatement)
+		want := `Call
+  Callee:
+    Ident(Add)
+  Arg
+    Int(1)
+  Arg
+    Call
+      Callee:
+        Ident(Add)
+      Arg
+        Int(2)
+      Arg
+        Int(3)`
+		if got := strings.TrimRight(assign.Value.String(), "\n"); got != want {
+			t.Errorf("--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+	})
+	t.Run("унарный минус слабее вызова", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nx := -F(1);\nEND_PROGRAM")
+		assign := prog.Body[0].(*ast.AssignStatement)
+		un, ok := assign.Value.(*ast.UnaryExpr)
+		if !ok {
+			t.Fatalf("ожидался *ast.UnaryExpr, получен %T", assign.Value)
+		}
+		if _, ok := un.Operand.(*ast.CallExpr); !ok {
+			t.Fatalf("операнд: ожидался *ast.CallExpr, получен %T", un.Operand)
+		}
+	})
+	t.Run("вызов ФБ как оператор", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nfast(step := 10, count => out, 7);\nEND_PROGRAM")
+		call, ok := prog.Body[0].(*ast.CallStatement)
+		if !ok {
+			t.Fatalf("ожидался *ast.CallStatement, получен %T", prog.Body[0])
+		}
+		want := `CallStmt
+  Call
+    Callee:
+      Ident(fast)
+    Arg(step :=)
+      Int(10)
+    Arg(count =>)
+      Ident(out)
+    Arg
+      Int(7)`
+		if got := strings.TrimRight(call.String(), "\n"); got != want {
+			t.Errorf("--- got ---\n%s\n--- want ---\n%s", got, want)
+		}
+	})
+	t.Run("вызов без аргументов", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\ninst();\nEND_PROGRAM")
+		call, ok := prog.Body[0].(*ast.CallStatement)
+		if !ok {
+			t.Fatalf("ожидался *ast.CallStatement, получен %T", prog.Body[0])
+		}
+		if len(call.Call.Args) != 0 {
+			t.Errorf("аргументов: got %d, want 0", len(call.Call.Args))
+		}
+	})
+	t.Run("привязка выхода в член", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nfb(Out => other.In);\nEND_PROGRAM")
+		call := prog.Body[0].(*ast.CallStatement)
+		arg := call.Call.Args[0]
+		if !arg.Output {
+			t.Error("ожидался Output-аргумент")
+		}
+		if _, ok := arg.Value.(*ast.MemberExpr); !ok {
+			t.Errorf("цель =>: ожидался *ast.MemberExpr, получен %T", arg.Value)
+		}
+	})
+}
+
 // TestForBy: необязательный шаг `BY` в FOR — узел Step в дереве; без BY
 // секции Step нет (nil → шаг 1).
 func TestForBy(t *testing.T) {
@@ -434,12 +530,32 @@ func TestParseErrors(t *testing.T) {
 		{
 			name:       "мусор на верхнем уровне после END_PROGRAM",
 			input:      "PROGRAM P\nEND_PROGRAM\nx := 1;\n",
-			wantSubstr: `line 3: expected PROGRAM at top level, got IDENT "x"`,
+			wantSubstr: `line 3: expected PROGRAM, FUNCTION or FUNCTION_BLOCK at top level, got IDENT "x"`,
 		},
 		{
 			name:       "BY без выражения шага",
 			input:      "PROGRAM P\nFOR i := 1 TO 5 BY DO\ni := 1;\nEND_FOR\nEND_PROGRAM",
 			wantSubstr: `line 2: expected expression, got DO`,
+		},
+		{
+			name:       "вызов без закрывающей скобки",
+			input:      "PROGRAM P\nx := Add(1, 2;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected )`,
+		},
+		{
+			name:       "=> с не-lvalue",
+			input:      "PROGRAM P\ninst(Out => 5);\nEND_PROGRAM",
+			wantSubstr: `line 2: output binding Out => requires a variable`,
+		},
+		{
+			name:       "END_FUNCTION вместо END_FUNCTION_BLOCK",
+			input:      "FUNCTION_BLOCK FB\nx := 1;\nEND_FUNCTION",
+			wantSubstr: `line 3: expected END_FUNCTION_BLOCK, got END_FUNCTION`,
+		},
+		{
+			name:       "вызов-оператор без точки с запятой",
+			input:      "PROGRAM P\ninst(step := 1)\nEND_PROGRAM",
+			wantSubstr: `line 3: expected ;`,
 		},
 	}
 	for _, tc := range tests {

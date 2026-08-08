@@ -1,0 +1,50 @@
+FunctionBlock(Accum)
+  VarBlock(VAR_INPUT)
+    VarDecl(add : INT)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(sum : INT)
+  Assign
+    Target:
+      Ident(sum)
+    Value:
+      Binary(+)
+        Ident(sum)
+        Ident(add)
+FunctionBlock(Machine)
+  VarBlock(VAR_INPUT)
+    VarDecl(tick : INT)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(doubled : INT)
+  VarBlock(VAR)
+    VarDecl(inner : Accum)
+    VarDecl(seed : INT)
+      Init:
+        Int(100)
+  CallStmt
+    Call
+      Callee:
+        Ident(inner)
+      Arg(add :=)
+        Ident(tick)
+  Assign
+    Target:
+      Ident(doubled)
+    Value:
+      Binary(+)
+        Binary(*)
+          Member(sum)
+            Ident(inner)
+          Int(2)
+        Ident(seed)
+Program(FbNested)
+  VarBlock(VAR)
+    VarDecl(m : Machine)
+    VarDecl(result : INT)
+  CallStmt
+    Call
+      Callee:
+        Ident(m)
+      Arg(tick :=)
+        Int(5)
+      Arg(doubled =>)
+        Ident(result)

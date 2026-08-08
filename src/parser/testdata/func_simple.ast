@@ -1,0 +1,107 @@
+Function(Add : INT)
+  VarBlock(VAR_INPUT)
+    VarDecl(x : INT)
+    VarDecl(y : INT)
+  Assign
+    Target:
+      Ident(Add)
+    Value:
+      Binary(+)
+        Ident(x)
+        Ident(y)
+Function(Clamp : INT)
+  VarBlock(VAR_INPUT)
+    VarDecl(v : INT)
+    VarDecl(lo : INT)
+    VarDecl(hi : INT)
+  Assign
+    Target:
+      Ident(Clamp)
+    Value:
+      Ident(v)
+  If
+    Cond:
+      Binary(<)
+        Ident(v)
+        Ident(lo)
+    Then:
+      Assign
+        Target:
+          Ident(Clamp)
+        Value:
+          Ident(lo)
+  If
+    Cond:
+      Binary(>)
+        Ident(v)
+        Ident(hi)
+    Then:
+      Assign
+        Target:
+          Ident(Clamp)
+        Value:
+          Ident(hi)
+Program(FuncSimple)
+  VarBlock(VAR)
+    VarDecl(plain : INT)
+    VarDecl(nested : INT)
+    VarDecl(named : INT)
+    VarDecl(clamped : INT)
+  Assign
+    Target:
+      Ident(plain)
+    Value:
+      Call
+        Callee:
+          Ident(Add)
+        Arg
+          Int(2)
+        Arg
+          Int(3)
+  Assign
+    Target:
+      Ident(nested)
+    Value:
+      Call
+        Callee:
+          Ident(Add)
+        Arg
+          Call
+            Callee:
+              Ident(Add)
+            Arg
+              Int(1)
+            Arg
+              Int(2)
+        Arg
+          Call
+            Callee:
+              Ident(Add)
+            Arg
+              Int(3)
+            Arg
+              Int(4)
+  Assign
+    Target:
+      Ident(named)
+    Value:
+      Call
+        Callee:
+          Ident(Add)
+        Arg(x :=)
+          Int(10)
+        Arg(y :=)
+          Int(5)
+  Assign
+    Target:
+      Ident(clamped)
+    Value:
+      Call
+        Callee:
+          Ident(Clamp)
+        Arg(v :=)
+          Int(99)
+        Arg(lo :=)
+          Int(0)
+        Arg(hi :=)
+          Int(50)

@@ -34,16 +34,19 @@ func New(l *lexer.Lexer) *Parser {
 
 // ParseSourceFile — точка входа: {POU} до EOF. Возвращает корень дерева и
 // первую ошибку (nil, если разбор успешен). Диспетчер по стартовому ключевому
-// слову; пока единственный вид POU — PROGRAM, ветки FUNCTION/FUNCTION_BLOCK
-// добавятся в этот же switch.
+// слову: PROGRAM, FUNCTION, FUNCTION_BLOCK.
 func (p *Parser) ParseSourceFile() (*ast.SourceFile, error) {
 	sf := &ast.SourceFile{}
 	for p.err == nil && !p.curIs(lexer.EOF) {
 		switch p.cur.Type {
 		case lexer.PROGRAM:
 			sf.POUs = append(sf.POUs, p.parseProgram())
+		case lexer.FUNCTION:
+			sf.POUs = append(sf.POUs, p.parseFunction())
+		case lexer.FUNCTION_BLOCK:
+			sf.POUs = append(sf.POUs, p.parseFunctionBlock())
 		default:
-			p.fail(fmt.Sprintf("expected PROGRAM at top level, got %s %q", p.cur.Type, p.cur.Literal))
+			p.fail(fmt.Sprintf("expected PROGRAM, FUNCTION or FUNCTION_BLOCK at top level, got %s %q", p.cur.Type, p.cur.Literal))
 		}
 	}
 	if p.err != nil {
@@ -102,6 +105,37 @@ func (p *Parser) parseProgram() *ast.Program {
 
 	p.expect(lexer.END_PROGRAM)
 	return prog
+}
+
+// parseFunction: FUNCTION IDENT : type {VAR-block} {statement} END_FUNCTION
+//
+// Тип возврата — через parseType: встроенный или пользовательский, решает
+// sema. Возврат значения по IEC — присваивание имени функции в теле.
+func (p *Parser) parseFunction() *ast.Function {
+	tok := p.expect(lexer.FUNCTION)
+	name := p.expect(lexer.IDENT)
+	p.expect(lexer.COLON)
+
+	fn := &ast.Function{Name: name.Literal, ReturnType: p.parseType(), Tok: tok}
+	fn.VarBlocks = p.parseVarBlocks()
+	fn.Body = p.parseStatements()
+
+	p.expect(lexer.END_FUNCTION)
+	return fn
+}
+
+// parseFunctionBlock: FUNCTION_BLOCK IDENT {VAR-block} {statement}
+// END_FUNCTION_BLOCK — как parseFunction, но без типа возврата.
+func (p *Parser) parseFunctionBlock() *ast.FunctionBlock {
+	tok := p.expect(lexer.FUNCTION_BLOCK)
+	name := p.expect(lexer.IDENT)
+
+	fb := &ast.FunctionBlock{Name: name.Literal, Tok: tok}
+	fb.VarBlocks = p.parseVarBlocks()
+	fb.Body = p.parseStatements()
+
+	p.expect(lexer.END_FUNCTION_BLOCK)
+	return fb
 }
 
 // varBlockKinds — стартовые токены семейства VAR* → вид блока.
@@ -205,7 +239,8 @@ func (p *Parser) parseStatements() []ast.Statement {
 // isBlockEnd — токен закрывает текущий блок операторов?
 func (p *Parser) isBlockEnd() bool {
 	switch p.cur.Type {
-	case lexer.END_PROGRAM, lexer.END_IF, lexer.END_FOR, lexer.ELSE, lexer.EOF:
+	case lexer.END_PROGRAM, lexer.END_FUNCTION, lexer.END_FUNCTION_BLOCK,
+		lexer.END_IF, lexer.END_FOR, lexer.ELSE, lexer.EOF:
 		return true
 	default:
 		return false
@@ -216,7 +251,7 @@ func (p *Parser) isBlockEnd() bool {
 func (p *Parser) parseStatement() ast.Statement {
 	switch p.cur.Type {
 	case lexer.IDENT:
-		return p.parseAssign()
+		return p.parseAssignOrCall()
 	case lexer.IF:
 		return p.parseIf()
 	case lexer.FOR:
@@ -227,18 +262,28 @@ func (p *Parser) parseStatement() ast.Statement {
 	}
 }
 
-// parseAssign: lvalue := expression ;
-//
-// Цель разбирается как primary-выражение; допустимый lvalue пока только
-// идентификатор (литерал/скобки слева → ошибка). Когда parsePrimary научится
-// постфиксам (`arr[i]`, `fb.out`), они станут целями без смены формы AST.
-func (p *Parser) parseAssign() ast.Statement {
+// parseAssignOrCall: оператор, начинающийся с идентификатора. Сначала
+// разбирается postfix-выражение (parsePrimary даёт Identifier, MemberExpr
+// или CallExpr), затем решает текущий токен: `:=` — присваивание (цель
+// обязана быть Identifier или MemberExpr), `;` после CallExpr — вызов ФБ
+// как оператор, иначе ошибка.
+func (p *Parser) parseAssignOrCall() ast.Statement {
 	tok := p.cur
 	target := p.parsePrimary()
 	if p.err != nil {
 		return nil
 	}
-	if _, ok := target.(*ast.Identifier); !ok {
+	if call, ok := target.(*ast.CallExpr); ok {
+		p.expect(lexer.SEMICOLON)
+		if p.err != nil {
+			return nil
+		}
+		return &ast.CallStatement{Call: call}
+	}
+	switch target.(type) {
+	case *ast.Identifier, *ast.MemberExpr:
+		// допустимые цели присваивания
+	default:
 		p.err = fmt.Errorf("line %d: invalid assignment target %q", tok.Line, tok.Literal)
 		return nil
 	}
@@ -365,16 +410,21 @@ func (p *Parser) parseUnary() ast.Expression {
 	return p.parsePrimary()
 }
 
-// parsePrimary — атом: идентификатор, целый литерал или ( expression ).
+// parsePrimary — атом (идентификатор, целый литерал, ( expression )) плюс
+// постфиксы: пока текущий токен `.` или `(`, атом наращивается в MemberExpr
+// (`inst.Out`) или CallExpr (`Add(1, 2)`). `(` после primary — постфиксный
+// оператор вызова из таблицы приоритетов Pratt (максимальный уровень —
+// сильнее унарного минуса: `-f(x)` это `-(f(x))`).
 func (p *Parser) parsePrimary() ast.Expression {
 	if p.err != nil {
 		return nil
 	}
+	var expr ast.Expression
 	switch p.cur.Type {
 	case lexer.IDENT:
 		tok := p.cur
 		p.nextToken()
-		return &ast.Identifier{Name: tok.Literal, Tok: tok}
+		expr = &ast.Identifier{Name: tok.Literal, Tok: tok}
 	case lexer.INT_LIT:
 		tok := p.cur
 		p.nextToken()
@@ -383,14 +433,75 @@ func (p *Parser) parsePrimary() ast.Expression {
 			p.fail(fmt.Sprintf("invalid integer literal %q", tok.Literal))
 			return nil
 		}
-		return &ast.IntLiteral{Value: val, Tok: tok}
+		expr = &ast.IntLiteral{Value: val, Tok: tok}
 	case lexer.LPAREN:
 		p.nextToken()
-		expr := p.parseExpression(lowestPrec)
+		expr = p.parseExpression(lowestPrec)
 		p.expect(lexer.RPAREN)
-		return expr
 	default:
 		p.fail(fmt.Sprintf("expected expression, got %s %q", p.cur.Type, p.cur.Literal))
 		return nil
 	}
+
+	for p.err == nil {
+		switch p.cur.Type {
+		case lexer.DOT:
+			tok := p.cur
+			p.nextToken()
+			member := p.expect(lexer.IDENT)
+			expr = &ast.MemberExpr{Base: expr, Member: member.Literal, Tok: tok}
+		case lexer.LPAREN:
+			tok := p.cur
+			p.nextToken()
+			expr = &ast.CallExpr{Callee: expr, Args: p.parseCallArgs(), Tok: tok}
+		default:
+			return expr
+		}
+	}
+	return expr
+}
+
+// parseCallArgs — аргументы вызова до `)`, через запятую. Формы аргумента:
+// `name := expr` (именованный вход), `name => lvalue` (привязка выхода ФБ;
+// цель обязана быть Identifier или MemberExpr), иначе позиционное выражение.
+// Различение — по peek после IDENT; `f()` без аргументов допустим.
+func (p *Parser) parseCallArgs() []*ast.Arg {
+	var args []*ast.Arg
+	for p.err == nil && !p.curIs(lexer.RPAREN) {
+		args = append(args, p.parseCallArg())
+		if !p.curIs(lexer.COMMA) {
+			break
+		}
+		p.nextToken()
+	}
+	p.expect(lexer.RPAREN)
+	return args
+}
+
+// parseCallArg — один аргумент вызова (см. parseCallArgs).
+func (p *Parser) parseCallArg() *ast.Arg {
+	if p.curIs(lexer.IDENT) && p.peekIs(lexer.ASSIGN) {
+		name := p.cur
+		p.nextToken() // имя
+		p.nextToken() // :=
+		return &ast.Arg{Name: name.Literal, Value: p.parseExpression(lowestPrec)}
+	}
+	if p.curIs(lexer.IDENT) && p.peekIs(lexer.ARROW) {
+		name := p.cur
+		p.nextToken() // имя
+		arrow := p.cur
+		p.nextToken() // =>
+		target := p.parsePrimary()
+		if p.err == nil {
+			switch target.(type) {
+			case *ast.Identifier, *ast.MemberExpr:
+				// допустимые цели привязки выхода
+			default:
+				p.err = fmt.Errorf("line %d: output binding %s => requires a variable, got expression", arrow.Line, name.Literal)
+				return nil
+			}
+		}
+		return &ast.Arg{Name: name.Literal, Value: target, Output: true}
+	}
+	return &ast.Arg{Value: p.parseExpression(lowestPrec)}
 }

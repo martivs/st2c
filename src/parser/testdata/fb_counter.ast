@@ -1,0 +1,49 @@
+FunctionBlock(Counter)
+  VarBlock(VAR_INPUT)
+    VarDecl(step : INT)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(count : INT)
+  VarBlock(VAR)
+    VarDecl(calls : INT)
+  Assign
+    Target:
+      Ident(calls)
+    Value:
+      Binary(+)
+        Ident(calls)
+        Int(1)
+  Assign
+    Target:
+      Ident(count)
+    Value:
+      Binary(+)
+        Ident(count)
+        Ident(step)
+Program(FbCounter)
+  VarBlock(VAR)
+    VarDecl(fast : Counter)
+    VarDecl(slow : Counter)
+    VarDecl(fastOut : INT)
+    VarDecl(total : INT)
+  CallStmt
+    Call
+      Callee:
+        Ident(fast)
+      Arg(step :=)
+        Int(10)
+      Arg(count =>)
+        Ident(fastOut)
+  CallStmt
+    Call
+      Callee:
+        Ident(slow)
+      Arg(step :=)
+        Int(1)
+  Assign
+    Target:
+      Ident(total)
+    Value:
+      Binary(+)
+        Ident(fastOut)
+        Member(count)
+          Ident(slow)
