@@ -31,6 +31,9 @@ void MainWindow::on_pushButtonOpen_clicked()
 
 
 void MainWindow::on_plainTextEditSource_textChanged()
+/* TODO: убрать textChanged-слот и синхронизацию stSource_ на каждый ввод —
+    заполнять stSource_ = ui->plainTextEditSource->toPlainText() один раз
+    в on_pushButtonTranslate_clicked() перед запуском процесса */
 {
     stSource_ = ui->plainTextEditSource->toPlainText();
 }
