@@ -6,6 +6,8 @@
 #include <QDir>
 #include <QProcess>
 #include <QMessageBox>
+#include <QFileDialog>
+#include <QFile>
 
 
 QT_BEGIN_NAMESPACE
@@ -32,7 +34,7 @@ private slots:
 private:
     Ui::MainWindow *ui;
 
-    QString stSource_;  // содержимое ST — то, что коллега будет отдавать твоему процессу
-    QString cResult_;   // содержимое C — то, что коллега получит на выходе
+    QString stSource_;  // содержимое ST
+    QString cResult_;   // содержимое C
 };
 #endif // MAINWINDOW_H

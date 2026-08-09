@@ -16,7 +16,17 @@ MainWindow::~MainWindow()
 
 void MainWindow::on_pushButtonOpen_clicked()
 {
+    QString path = QFileDialog::getOpenFileName(this, tr("Open ST file"), QString(), tr("ST files (*.st);;All files (*)"));
+    if (path.isEmpty())
+        return;
 
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        QMessageBox::warning(this, tr("Error"), tr("Failed to open %1").arg(path));
+        return;
+    }
+
+    ui->plainTextEditSource->setPlainText(QString::fromUtf8(file.readAll()));
 }
 
 
