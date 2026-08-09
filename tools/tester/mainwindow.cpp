@@ -47,7 +47,7 @@ void MainWindow::on_pushButtonTranslate_clicked()
 #else
         "st2c";
 #endif
-
+    // NOTE: разберись обработчиком. Ассинхронность etc
     QString exePath = QDir(QCoreApplication::applicationDirPath()).filePath(exeName);
 
     QProcess process;
