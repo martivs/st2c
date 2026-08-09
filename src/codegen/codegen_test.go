@@ -146,6 +146,7 @@ func TestNameErrors(t *testing.T) {
 		name       string
 		src        string
 		wantSubstr string
+		skipSema   bool // кейсы, которые sema этапа 6 отвергла бы раньше codegen
 	}{
 		{
 			name:       "не-ASCII имя переменной",
@@ -158,9 +159,13 @@ func TestNameErrors(t *testing.T) {
 			wantSubstr: `line 4:1: codegen: renamed "switch" collides with "st_switch"`,
 		},
 		{
+			// С этапа 6 неизвестный тип ловит sema; проверка в cType остаётся
+			// внутренней защитой (Generate можно позвать и без sema) — тест
+			// зовёт генератор напрямую, минуя sema.
 			name:       "неизвестный тип",
 			src:        "PROGRAM P\nVAR\nm : MyType;\nEND_VAR\nEND_PROGRAM",
 			wantSubstr: `line 3:1: codegen: no C mapping for type "MyType"`,
+			skipSema:   true,
 		},
 		{
 			name:       "не-ASCII имя параметра функции",
@@ -180,8 +185,10 @@ func TestNameErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse error: %v", err)
 			}
-			if errs := sema.Check(sf); len(errs) > 0 {
-				t.Fatalf("sema errors: %v", errs)
+			if !tc.skipSema {
+				if errs := sema.Check(sf); len(errs) > 0 {
+					t.Fatalf("sema errors: %v", errs)
+				}
 			}
 			_, err = codegen.Generate(sf, codegen.Options{})
 			if err == nil {

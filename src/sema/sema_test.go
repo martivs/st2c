@@ -107,8 +107,13 @@ END_PROGRAM`,
 			want: []string{`literal 32768 out of range for INT`},
 		},
 		{
-			name: "пользовательский тип: диапазон INT не навязывается",
+			// С этапа 6 пользовательские типы резолвятся в объявленные ФБ;
+			// нерезолвившийся тип — ошибка (прежний молчаливый пропуск ушёл).
+			// Диапазон INT к неизвестному типу по-прежнему не навязывается —
+			// на литерал 100000 второй ошибки нет.
+			name: "неизвестный пользовательский тип — ошибка (этап 6)",
 			src:  "PROGRAM P\nVAR m : MyType := 100000; END_VAR\nEND_PROGRAM",
+			want: []string{`line 2:5: unknown type "MyType"`},
 		},
 		{
 			name: "несколько ошибок за один проход",
@@ -140,7 +145,7 @@ END_PROGRAM`,
 
 // TestFunctions — этап 4: глобальная таблица POU, области видимости функций,
 // проверки вызовов, запрет рекурсии. ФБ-специфика (экземпляры, члены,
-// вызов-оператор) до этапа 6 молча пропускается — это тоже фиксируется здесь.
+// вызов-оператор) — этап 6, TestFunctionBlocks.
 func TestFunctions(t *testing.T) {
 	// Общая пара функций для кейсов вызова.
 	const addSrc = `FUNCTION Add : INT
@@ -274,9 +279,10 @@ END_FUNCTION`,
 			want: []string{`line 3:6: undeclared variable "y"`},
 		},
 		{
-			// Экземпляры ФБ, вызов-оператор и члены — этап 6: до него молча
-			// пропускаются, ложных ошибок быть не должно.
-			name: "экземпляры ФБ, вызов-оператор и члены пропускаются без ошибок",
+			// Экземпляры ФБ, вызов-оператор и члены с этапа 6 проверяются;
+			// эта программа корректна по всем правилам (запись во вход,
+			// чтение выхода, привязка `=>`) — ложных ошибок быть не должно.
+			name: "экземпляры ФБ, вызов-оператор и члены: корректная программа чиста",
 			src: `FUNCTION_BLOCK Counter
 VAR_INPUT step : INT; END_VAR
 VAR_OUTPUT count : INT; END_VAR
@@ -305,9 +311,187 @@ END_PROGRAM`,
 	}
 }
 
+// TestFunctionBlocks — этап 6: резолв пользовательских типов в объявленные
+// ФБ, доступ к членам (вход — только запись, выход — только чтение), вызов
+// ФБ как оператор (только именованные аргументы; список необязателен и может
+// быть неполным), запрет циклической вложенности экземпляров.
+func TestFunctionBlocks(t *testing.T) {
+	// Общий ФБ для кейсов: вход step, выход count, внутренняя calls.
+	// Занимает строки 1–6, программа за ним начинается со строки 7.
+	const fbSrc = `FUNCTION_BLOCK Counter
+VAR_INPUT step : INT; END_VAR
+VAR_OUTPUT count : INT; END_VAR
+VAR calls : INT; END_VAR
+count := count + step;
+END_FUNCTION_BLOCK
+`
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			// Аргументы ФБ необязательны: slow(step := 1) без привязки выхода
+			// и slow() совсем без аргументов законны — непереданный вход
+			// хранит значение с прошлого вызова, в этом смысл состояния.
+			name: "корректная программа: частичные аргументы, члены, два экземпляра",
+			src: fbSrc + `PROGRAM P
+VAR fast : Counter; slow : Counter; out : INT; total : INT; END_VAR
+fast(step := 10, count => out);
+slow(step := 1);
+slow();
+fast.step := 2;
+total := out + slow.count;
+END_PROGRAM`,
+		},
+		{
+			name: "привязка выхода в член-вход другого экземпляра — законна",
+			src: fbSrc + `PROGRAM P
+VAR a : Counter; b : Counter; END_VAR
+a(count => b.step);
+END_PROGRAM`,
+		},
+		{
+			name: "неизвестный тип объявления",
+			src:  "PROGRAM P\nVAR c : Widget; END_VAR\nEND_PROGRAM",
+			want: []string{`line 2:5: unknown type "Widget"`},
+		},
+		{
+			name: "имя PROGRAM в позиции типа",
+			src:  "PROGRAM Q\nEND_PROGRAM\nPROGRAM P\nVAR c : Q; END_VAR\nEND_PROGRAM",
+			want: []string{`line 4:5: "Q" is not a type`},
+		},
+		{
+			name: "имя FUNCTION в позиции типа",
+			src:  "FUNCTION F : INT\nF := 0;\nEND_FUNCTION\nPROGRAM P\nVAR c : F; END_VAR\nEND_PROGRAM",
+			want: []string{`line 5:5: "F" is not a type`},
+		},
+		{
+			name: "инициализатор у экземпляра ФБ",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter := 5; END_VAR\nEND_PROGRAM",
+			want: []string{`line 8:5: function block instance cannot have an initializer`},
+		},
+		{
+			name: "член у не-экземпляра",
+			src:  "PROGRAM P\nVAR x : INT; y : INT; END_VAR\ny := x.foo;\nEND_PROGRAM",
+			want: []string{`line 3:7: "x" is not a function block instance`},
+		},
+		{
+			name: "несуществующий член",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; x : INT; END_VAR\nx := c.missing;\nEND_PROGRAM",
+			want: []string{`line 9:7: function block "Counter" has no input or output "missing"`},
+		},
+		{
+			name: "внутренняя VAR снаружи недоступна",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; x : INT; END_VAR\nx := c.calls;\nEND_PROGRAM",
+			want: []string{`line 9:7: function block "Counter" has no input or output "calls"`},
+		},
+		{
+			name: "чтение входа извне",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; x : INT; END_VAR\nx := c.step;\nEND_PROGRAM",
+			want: []string{`line 9:7: cannot read input "step" of instance "c"`},
+		},
+		{
+			name: "запись в выход извне",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc.count := 1;\nEND_PROGRAM",
+			want: []string{`line 9:2: cannot assign to output "count" of instance "c"`},
+		},
+		{
+			name: "диапазон литерала через тип члена",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc.step := 40000;\nEND_PROGRAM",
+			want: []string{`line 9:11: literal 40000 out of range for INT`},
+		},
+		{
+			name: "вызов-оператор у скалярной переменной",
+			src:  "PROGRAM P\nVAR x : INT; END_VAR\nx();\nEND_PROGRAM",
+			want: []string{`line 3:1: "x" is not a function block instance`},
+		},
+		{
+			name: "вызов-оператор у имени ФБ-типа (без экземпляра)",
+			src:  fbSrc + "PROGRAM P\nCounter(step := 1);\nEND_PROGRAM",
+			want: []string{`line 8:1: "Counter" is not a function block instance`},
+		},
+		{
+			name: "вызов-оператор необъявленного имени",
+			src:  "PROGRAM P\nfoo();\nEND_PROGRAM",
+			want: []string{`line 2:1: "foo" is not a function block instance`},
+		},
+		{
+			name: "позиционный аргумент в вызове ФБ",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc(1);\nEND_PROGRAM",
+			want: []string{`line 9:2: function block call arguments must be named`},
+		},
+		{
+			name: "привязка := к выходу",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc(count := 1);\nEND_PROGRAM",
+			want: []string{`line 9:2: "count" is an output of "Counter": bind it with =>, not :=`},
+		},
+		{
+			name: "привязка => ко входу",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; x : INT; END_VAR\nc(step => x);\nEND_PROGRAM",
+			want: []string{`line 9:2: "step" is an input of "Counter": pass it with :=, not =>`},
+		},
+		{
+			name: "несуществующее имя аргумента",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc(bogus := 1);\nEND_PROGRAM",
+			want: []string{`line 9:2: function block "Counter" has no input or output "bogus"`},
+		},
+		{
+			name: "повторная привязка входа",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc(step := 1, step := 2);\nEND_PROGRAM",
+			want: []string{`line 9:2: "step" bound more than once in call of instance "c"`},
+		},
+		{
+			name: "экземпляр как значение в выражении",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; x : INT; END_VAR\nx := c;\nEND_PROGRAM",
+			want: []string{`line 9:6: function block instance "c" cannot be used as a value`},
+		},
+		{
+			name: "присваивание экземпляру целиком",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; END_VAR\nc := 1;\nEND_PROGRAM",
+			want: []string{`line 9:1: cannot assign to function block instance "c"`},
+		},
+		{
+			name: "вызов экземпляра в выражении",
+			src:  fbSrc + "PROGRAM P\nVAR c : Counter; x : INT; END_VAR\nx := c(step := 1);\nEND_PROGRAM",
+			want: []string{`line 9:6: function block instance "c" cannot be called in an expression`},
+		},
+		{
+			name: "прямая циклическая вложенность",
+			src:  "FUNCTION_BLOCK C\nVAR me : C; END_VAR\nEND_FUNCTION_BLOCK",
+			want: []string{`line 2:5: instance "me" creates cyclic nesting of function blocks`},
+		},
+		{
+			// Одна ошибка на цикл — на объявлении, замыкающем его при DFS
+			// в порядке файла.
+			name: "взаимная циклическая вложенность",
+			src: `FUNCTION_BLOCK A
+VAR b : B; END_VAR
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK B
+VAR a : A; END_VAR
+END_FUNCTION_BLOCK`,
+			want: []string{`line 5:5: instance "a" creates cyclic nesting of function blocks`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := check(t, tc.src)
+			if len(errs) != len(tc.want) {
+				t.Fatalf("ошибок: got %d, want %d\ngot: %v", len(errs), len(tc.want), errs)
+			}
+			for i, sub := range tc.want {
+				if !strings.Contains(errs[i].Error(), sub) {
+					t.Errorf("ошибка %d: %q не содержит %q", i, errs[i].Error(), sub)
+				}
+			}
+		})
+	}
+}
+
 // TestExamplesClean — весь корпус examples/ проходит sema без ошибок:
-// регрессия на ложные срабатывания (особенно на ФБ-примерах, чья специфика
-// до этапа 6 должна молча пропускаться).
+// регрессия на ложные срабатывания (особенно на ФБ-примерах: резолв типов,
+// члены и вызов-оператор с этапа 6 проверяются по-настоящему).
 func TestExamplesClean(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.st"))
 	if err != nil {

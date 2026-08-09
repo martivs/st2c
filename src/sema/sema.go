@@ -6,9 +6,13 @@
 // Полный вывод типов выражений отложен — пока проверяются объявленность,
 // вызовы функций и диапазон литералов при известном целевом типе.
 //
-// Экземпляры ФБ, доступ к членам (`inst.Out`) и вызов ФБ как оператор
-// (`inst(In := x);`) на этом этапе молча пропускаются — их проверки придут
-// на этапе 6 плана 2026-08-07.
+// Экземпляры ФБ (этап 6): объявление `inst : Counter;` резолвится в
+// объявленный FUNCTION_BLOCK, нерезолвившийся тип — ошибка. Снаружи доступен
+// только интерфейс экземпляра: вход — только запись, выход — только чтение.
+// Вызов ФБ — только оператором и только с именованными аргументами; аргументы
+// необязательны (непереданный вход хранит значение с прошлого вызова).
+// Циклическая вложенность экземпляров запрещена — struct в C был бы
+// бесконечного размера.
 package sema
 
 import (
@@ -30,6 +34,9 @@ type Symbol struct {
 	Name     string      // оригинальное написание из объявления
 	TypeName string      // имя типа как записано в объявлении
 	Tok      lexer.Token // позиция объявления
+	// FB — узел FUNCTION_BLOCK, если переменная — экземпляр ФБ (тип
+	// объявления отрезолвился в ФБ); nil для обычных переменных.
+	FB *ast.FunctionBlock
 }
 
 // callEdge — ребро графа вызовов «функция → функция» для запрета рекурсии.
@@ -90,7 +97,29 @@ func Check(sf *ast.SourceFile) []error {
 	}
 
 	errs = append(errs, checkRecursion(sf, graph)...)
+	errs = append(errs, checkInstanceCycles(sf, pous)...)
 	return errs
+}
+
+// resolveType резолвит тип объявления: INT — встроенный, остальные имена
+// ищутся в глобальной таблице POU. Найденный FUNCTION_BLOCK делает переменную
+// экземпляром ФБ; другой POU или неизвестное имя — ошибка (молчаливый пропуск
+// пользовательских типов ушёл с этапом 6).
+func (c *checker) resolveType(d *ast.VarDecl) *ast.FunctionBlock {
+	if strings.EqualFold(d.TypeName, "INT") {
+		return nil
+	}
+	pou, ok := c.pous[strings.ToUpper(d.TypeName)]
+	if !ok {
+		c.errorf(d.Tok, "unknown type %q", d.TypeName)
+		return nil
+	}
+	fb, isFB := pou.(*ast.FunctionBlock)
+	if !isFB {
+		c.errorf(d.Tok, "%q is not a type", d.TypeName)
+		return nil
+	}
+	return fb
 }
 
 // pouName возвращает имя POU и токен-якорь для сообщений об ошибках.
@@ -128,6 +157,10 @@ func (c *checker) checkBody(blocks []*ast.VarBlock, body []ast.Statement) {
 	// отдельным проходом, чтобы порядок объявлений не влиял на объявленность.
 	for _, blk := range blocks {
 		for _, d := range blk.Decls {
+			fb := c.resolveType(d)
+			if fb != nil && d.Init != nil {
+				c.errorf(d.Tok, "function block instance cannot have an initializer")
+			}
 			for _, name := range d.Names {
 				key := strings.ToUpper(name.Name)
 				if prev, ok := c.syms[key]; ok {
@@ -135,7 +168,7 @@ func (c *checker) checkBody(blocks []*ast.VarBlock, body []ast.Statement) {
 						name.Name, prev.Name, prev.Tok.Line)
 					continue
 				}
-				c.syms[key] = &Symbol{Name: name.Name, TypeName: d.TypeName, Tok: name.Tok}
+				c.syms[key] = &Symbol{Name: name.Name, TypeName: d.TypeName, Tok: name.Tok, FB: fb}
 			}
 		}
 	}
@@ -158,17 +191,7 @@ func (c *checker) checkStatements(stmts []ast.Statement) {
 func (c *checker) checkStatement(s ast.Statement) {
 	switch st := s.(type) {
 	case *ast.AssignStatement:
-		targetType := ""
-		if id, ok := st.Target.(*ast.Identifier); ok {
-			if sym := c.lookup(id); sym != nil {
-				targetType = sym.TypeName
-			}
-		} else {
-			// Иные lvalue (сейчас MemberExpr) обходим как выражение; сам
-			// MemberExpr до этапа 6 пропускается молча.
-			c.checkExpr(st.Target, "")
-		}
-		c.checkExpr(st.Value, targetType)
+		c.checkExpr(st.Value, c.checkWrite(st.Target))
 	case *ast.IfStatement:
 		// Целевой тип операндов условия — INT: других типов в MVP нет,
 		// полноценный вывод типов (BOOL у сравнений) придёт со слоем типов.
@@ -176,10 +199,7 @@ func (c *checker) checkStatement(s ast.Statement) {
 		c.checkStatements(st.Then)
 		c.checkStatements(st.Else)
 	case *ast.ForStatement:
-		loopType := ""
-		if sym := c.lookup(st.Var); sym != nil {
-			loopType = sym.TypeName
-		}
+		loopType := c.checkWrite(st.Var)
 		c.checkExpr(st.Start, loopType)
 		c.checkExpr(st.End, loopType)
 		if st.Step != nil {
@@ -187,8 +207,29 @@ func (c *checker) checkStatement(s ast.Statement) {
 		}
 		c.checkStatements(st.Body)
 	case *ast.CallStatement:
-		// Вызов ФБ как оператор — проверки экземпляров придут на этапе 6.
+		c.checkFBCall(st.Call)
 	}
+}
+
+// checkWrite проверяет цель записи (цель присваивания, переменную FOR,
+// цель `name => target`) и возвращает её тип ("" — тип неизвестен, диапазон
+// литералов не проверяется). Экземпляр ФБ целиком — не lvalue.
+func (c *checker) checkWrite(target ast.Expression) string {
+	switch t := target.(type) {
+	case *ast.Identifier:
+		if sym := c.lookup(t); sym != nil {
+			if sym.FB != nil {
+				c.errorf(t.Tok, "cannot assign to function block instance %q", t.Name)
+				return ""
+			}
+			return sym.TypeName
+		}
+	case *ast.MemberExpr:
+		return c.resolveMember(t, true)
+	default:
+		c.checkExpr(target, "")
+	}
+	return ""
 }
 
 // checkExpr обходит выражение: ссылки должны быть объявлены, целочисленные
@@ -197,7 +238,9 @@ func (c *checker) checkStatement(s ast.Statement) {
 func (c *checker) checkExpr(e ast.Expression, targetType string) {
 	switch ex := e.(type) {
 	case *ast.Identifier:
-		c.lookup(ex)
+		if sym := c.lookup(ex); sym != nil && sym.FB != nil {
+			c.errorf(ex.Tok, "function block instance %q cannot be used as a value", ex.Name)
+		}
 	case *ast.IntLiteral:
 		c.checkIntRange(int64(ex.Value), ex.Tok, targetType)
 	case *ast.UnaryExpr:
@@ -212,7 +255,8 @@ func (c *checker) checkExpr(e ast.Expression, targetType string) {
 		c.checkExpr(ex.Left, targetType)
 		c.checkExpr(ex.Right, targetType)
 	case *ast.MemberExpr:
-		// inst.Out — резолв членов экземпляров ФБ придёт на этапе 6.
+		// Чтение inst.Out в выражении: разрешены только выходы.
+		c.resolveMember(ex, false)
 	case *ast.CallExpr:
 		c.checkCall(ex)
 	}
@@ -232,8 +276,15 @@ func (c *checker) checkCall(call *ast.CallExpr) {
 	key := strings.ToUpper(id.Name)
 	pou, found := c.pous[key]
 	if !found {
-		if _, isLocal := c.syms[key]; isLocal {
-			// Локальная переменная — экземпляр ФБ; проверки вызова — этап 6.
+		if sym, isLocal := c.syms[key]; isLocal {
+			if sym.FB != nil {
+				// У ФБ нет возвращаемого значения — в выражении ему делать
+				// нечего, вызов экземпляра пишется оператором.
+				c.errorf(id.Tok, "function block instance %q cannot be called in an expression (call it as a statement)", id.Name)
+			} else {
+				c.errorf(id.Tok, "%q is not a function", id.Name)
+			}
+			c.checkArgsBlind(call)
 			return
 		}
 		c.errorf(id.Tok, "undeclared function %q", id.Name)
@@ -264,7 +315,7 @@ func (c *checker) checkCall(call *ast.CallExpr) {
 		case a.Output:
 			// У функции нет выходов VAR_OUTPUT — привязывать нечего.
 			c.errorf(call.Tok, "output binding %q => is not applicable to function %q", a.Name, id.Name)
-			c.checkExpr(a.Value, "")
+			c.checkWrite(a.Value)
 		case a.Name == "":
 			if sawNamed {
 				c.errorf(call.Tok, "positional argument after named argument in call of %q", id.Name)
@@ -298,10 +349,15 @@ func (c *checker) checkCall(call *ast.CallExpr) {
 }
 
 // checkArgsBlind обходит значения аргументов без знания входов — чтобы
-// ошибки в них не терялись, когда сам вызов уже некорректен.
+// ошибки в них не терялись, когда сам вызов уже некорректен. Цель `=>`
+// проверяется как запись, остальные значения — как чтение.
 func (c *checker) checkArgsBlind(call *ast.CallExpr) {
 	for _, a := range call.Args {
-		c.checkExpr(a.Value, "")
+		if a.Output {
+			c.checkWrite(a.Value)
+		} else {
+			c.checkExpr(a.Value, "")
+		}
 	}
 }
 
@@ -324,6 +380,179 @@ func functionInputs(fn *ast.Function) []input {
 		}
 	}
 	return ins
+}
+
+// fbMember ищет имя среди входов и выходов интерфейса ФБ (ключ ToUpper).
+// Внутренние VAR/VAR_TEMP снаружи недоступны — для них ok == false.
+func fbMember(fb *ast.FunctionBlock, name string) (typeName string, kind ast.VarKind, ok bool) {
+	key := strings.ToUpper(name)
+	for _, blk := range fb.VarBlocks {
+		if blk.Kind != ast.VarInput && blk.Kind != ast.VarOutput {
+			continue
+		}
+		for _, d := range blk.Decls {
+			for _, n := range d.Names {
+				if strings.ToUpper(n.Name) == key {
+					return d.TypeName, blk.Kind, true
+				}
+			}
+		}
+	}
+	return "", 0, false
+}
+
+// resolveMember резолвит `inst.Member`: база — экземпляр ФБ, член — вход или
+// выход его интерфейса. Доступ извне направленный: вход — только запись,
+// выход — только чтение (write задаёт контекст). Возвращает тип члена
+// ("" — ошибка уже выдана, диапазон литералов не проверяется).
+func (c *checker) resolveMember(m *ast.MemberExpr, write bool) string {
+	id, ok := m.Base.(*ast.Identifier)
+	if !ok {
+		// Вложенный доступ m.inner.sum в MVP не поддерживается: внутреннее
+		// состояние выводится наружу через VAR_OUTPUT.
+		c.errorf(m.Tok, "member access base must be a function block instance")
+		return ""
+	}
+	sym, found := c.syms[strings.ToUpper(id.Name)]
+	if !found {
+		c.errorf(id.Tok, "undeclared variable %q", id.Name)
+		return ""
+	}
+	if sym.FB == nil {
+		c.errorf(m.Tok, "%q is not a function block instance", id.Name)
+		return ""
+	}
+	typeName, kind, found := fbMember(sym.FB, m.Member)
+	if !found {
+		c.errorf(m.Tok, "function block %q has no input or output %q", sym.FB.Name, m.Member)
+		return ""
+	}
+	if write && kind != ast.VarInput {
+		c.errorf(m.Tok, "cannot assign to output %q of instance %q", m.Member, id.Name)
+		return ""
+	}
+	if !write && kind != ast.VarOutput {
+		c.errorf(m.Tok, "cannot read input %q of instance %q", m.Member, id.Name)
+		return ""
+	}
+	return typeName
+}
+
+// checkFBCall проверяет вызов ФБ как оператор: `inst(In := x, Out => y);`.
+// Аргументы только именованные; список необязателен и может быть неполным —
+// непереданный вход сохраняет значение с прошлого вызова, в этом смысл
+// состояния (у функций наоборот: все входы обязательны).
+func (c *checker) checkFBCall(call *ast.CallExpr) {
+	id, ok := call.Callee.(*ast.Identifier)
+	if !ok {
+		c.errorf(call.Tok, "call statement target must be a function block instance")
+		return
+	}
+	sym, isLocal := c.syms[strings.ToUpper(id.Name)]
+	if !isLocal || sym.FB == nil {
+		c.errorf(id.Tok, "%q is not a function block instance", id.Name)
+		c.checkArgsBlind(call)
+		return
+	}
+	fb := sym.FB
+	bound := map[string]bool{}
+	for _, a := range call.Args {
+		if a.Name == "" {
+			c.errorf(call.Tok, "function block call arguments must be named (In := x, Out => y)")
+			c.checkExpr(a.Value, "")
+			continue
+		}
+		typeName, kind, found := fbMember(fb, a.Name)
+		if !found {
+			c.errorf(call.Tok, "function block %q has no input or output %q", fb.Name, a.Name)
+			if a.Output {
+				c.checkWrite(a.Value)
+			} else {
+				c.checkExpr(a.Value, "")
+			}
+			continue
+		}
+		key := strings.ToUpper(a.Name)
+		if bound[key] {
+			c.errorf(call.Tok, "%q bound more than once in call of instance %q", a.Name, id.Name)
+		}
+		bound[key] = true
+		switch {
+		case a.Output && kind != ast.VarOutput:
+			c.errorf(call.Tok, "%q is an input of %q: pass it with :=, not =>", a.Name, fb.Name)
+			c.checkWrite(a.Value)
+		case !a.Output && kind != ast.VarInput:
+			c.errorf(call.Tok, "%q is an output of %q: bind it with =>, not :=", a.Name, fb.Name)
+			c.checkExpr(a.Value, "")
+		case a.Output:
+			c.checkWrite(a.Value)
+		default:
+			c.checkExpr(a.Value, typeName)
+		}
+	}
+}
+
+// fbEdge — ребро графа вложенности «ФБ содержит экземпляр ФБ».
+type fbEdge struct {
+	inner string      // ключ ToUpper вложенного ФБ
+	name  string      // имя поля-экземпляра
+	tok   lexer.Token // позиция объявления поля
+}
+
+// checkInstanceCycles ловит циклическую вложенность экземпляров: ФБ, прямо
+// или косвенно содержащий экземпляр самого себя, дал бы в C struct
+// бесконечного размера. DFS тремя цветами по образцу checkRecursion; ошибка
+// на позиции объявления, замыкающего цикл, одна на цикл.
+func checkInstanceCycles(sf *ast.SourceFile, pous map[string]ast.POU) []error {
+	graph := map[string][]fbEdge{}
+	for _, pou := range sf.POUs {
+		fb, ok := pou.(*ast.FunctionBlock)
+		if !ok {
+			continue
+		}
+		key := strings.ToUpper(fb.Name)
+		for _, blk := range fb.VarBlocks {
+			for _, d := range blk.Decls {
+				inner, isFB := pous[strings.ToUpper(d.TypeName)].(*ast.FunctionBlock)
+				if !isFB {
+					continue
+				}
+				for _, n := range d.Names {
+					graph[key] = append(graph[key],
+						fbEdge{inner: strings.ToUpper(inner.Name), name: n.Name, tok: n.Tok})
+				}
+			}
+		}
+	}
+	const (
+		white = iota
+		gray
+		black
+	)
+	state := map[string]int{}
+	var errs []error
+	var visit func(key string)
+	visit = func(key string) {
+		state[key] = gray
+		for _, e := range graph[key] {
+			switch state[e.inner] {
+			case gray:
+				errs = append(errs, fmt.Errorf("line %d:%d: instance %q creates cyclic nesting of function blocks (a block cannot contain itself)",
+					e.tok.Line, e.tok.Col, e.name))
+			case white:
+				visit(e.inner)
+			}
+		}
+		state[key] = black
+	}
+	for _, pou := range sf.POUs {
+		if fb, ok := pou.(*ast.FunctionBlock); ok {
+			if key := strings.ToUpper(fb.Name); state[key] == white {
+				visit(key)
+			}
+		}
+	}
+	return errs
 }
 
 // checkRecursion ищет циклы в графе вызовов функций: по IEC функции
