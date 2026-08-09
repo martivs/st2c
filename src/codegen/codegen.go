@@ -24,24 +24,48 @@ type Options struct {
 
 // unit — один POU файла в порядке исходника; заполнено ровно одно поле.
 type unit struct {
-	prog *progInfo
-	fn   *funcInfo
+	state *stateInfo
+	fn    *funcInfo
 }
 
 // Generate превращает дерево в текст C-файла. Ошибки — имена и типы,
 // непредставимые в C, а также -main без единой PROGRAM в файле.
 func Generate(sf *ast.SourceFile, opts Options) (string, error) {
+	// Оболочки ФБ строятся до всего остального: экземпляр может быть объявлен
+	// выше своего FUNCTION_BLOCK по файлу, а collectVars любого POU должен
+	// уметь отличить тип-ФБ от скаляра.
+	fbs := map[string]*stateInfo{}
+	for _, pou := range sf.POUs {
+		if fb, ok := pou.(*ast.FunctionBlock); ok {
+			cn, err := mapName(fb.Name, fb.Tok)
+			if err != nil {
+				return "", err
+			}
+			fbs[strings.ToUpper(fb.Name)] = &stateInfo{
+				stName: fb.Name, cName: cn, stepName: "body",
+				blocks: fb.VarBlocks, body: fb.Body,
+			}
+		}
+	}
+
 	var units []unit
-	var progs []*progInfo
+	var progs []*stateInfo
 	funcs := map[string]*funcInfo{}
 	for _, pou := range sf.POUs {
 		switch p := pou.(type) {
 		case *ast.Program:
-			info, err := newProgInfo(p)
+			cn, err := mapName(p.Name, p.Tok)
 			if err != nil {
 				return "", err
 			}
-			units = append(units, unit{prog: info})
+			info := &stateInfo{
+				stName: p.Name, cName: cn, stepName: "step",
+				blocks: p.VarBlocks, body: p.Body,
+			}
+			if err := info.collectVars(fbs); err != nil {
+				return "", err
+			}
+			units = append(units, unit{state: info})
 			progs = append(progs, info)
 		case *ast.Function:
 			info, err := newFuncInfo(p)
@@ -50,8 +74,12 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 			}
 			units = append(units, unit{fn: info})
 			funcs[strings.ToUpper(p.Name)] = info
-		default:
-			return "", fmt.Errorf("line %d: codegen: unsupported POU %T", pou.Line(), pou)
+		case *ast.FunctionBlock:
+			info := fbs[strings.ToUpper(p.Name)]
+			if err := info.collectVars(fbs); err != nil {
+				return "", err
+			}
+			units = append(units, unit{state: info})
 		}
 	}
 	if opts.Main && len(progs) == 0 {
@@ -66,10 +94,35 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 
 	// Два прохода (решение 5): сначала все typedef и прототипы, потом все
 	// тела — порядок POU в исходнике и взаимные ссылки перестают иметь
-	// значение.
-	for _, u := range units {
+	// значение. Одно исключение: struct владельца содержит struct экземпляра
+	// по значению, и typedef вложенного ФБ обязан идти раньше — прототипы
+	// этого не решают. declare эмитит зависимости post-order DFS
+	// (топологическая сортировка; циклы вложенности отсёк sema на этапе 6).
+	declared := map[*stateInfo]bool{}
+	var declare func(info *stateInfo) error
+	declare = func(info *stateInfo) error {
+		if declared[info] {
+			return nil
+		}
+		declared[info] = true
+		for _, vi := range info.order {
+			if vi.fb != nil {
+				if err := declare(vi.fb); err != nil {
+					return err
+				}
+			}
+		}
 		g.blank()
+		if err := g.emitTypedef(info); err != nil {
+			return err
+		}
+		g.linef("void %s_init(%s *self);", info.cName, info.cName)
+		g.linef("void %s_%s(%s *self);", info.cName, info.stepName, info.cName)
+		return nil
+	}
+	for _, u := range units {
 		if u.fn != nil {
+			g.blank()
 			sig, err := funcSignature(u.fn)
 			if err != nil {
 				return "", err
@@ -77,11 +130,9 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 			g.linef("%s;", sig)
 			continue
 		}
-		if err := g.emitTypedef(u.prog); err != nil {
+		if err := declare(u.state); err != nil {
 			return "", err
 		}
-		g.linef("void %s_init(%s *self);", u.prog.cName, u.prog.cName)
-		g.linef("void %s_step(%s *self);", u.prog.cName, u.prog.cName)
 	}
 	for _, u := range units {
 		if u.fn != nil {
@@ -92,11 +143,11 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 			continue
 		}
 		g.blank()
-		if err := g.emitInit(u.prog); err != nil {
+		if err := g.emitInit(u.state); err != nil {
 			return "", err
 		}
 		g.blank()
-		if err := g.emitStep(u.prog); err != nil {
+		if err := g.emitStep(u.state); err != nil {
 			return "", err
 		}
 	}
@@ -184,48 +235,55 @@ func mapName(name string, tok lexer.Token) (string, error) {
 
 // varInfo — переменная POU глазами генератора.
 type varInfo struct {
-	stName string // оригинальное написание из объявления (для печати драйвером)
-	cName  string // имя поля в struct
-	stType string // имя ST-типа как объявлено
+	stName string      // оригинальное написание из объявления (для печати драйвером)
+	cName  string      // имя поля в struct
+	stType string      // имя ST-типа как объявлено
+	fb     *stateInfo  // не nil → экземпляр ФБ: поле-struct, а не скаляр
 	tok    lexer.Token
 }
 
-// progInfo — PROGRAM с построенной таблицей имён. Ключ vars —
-// strings.ToUpper: ссылка TOTAL на объявленное total обязана дать один и тот
-// же C-идентификатор, иначе регистронезависимость IEC сломает компиляцию C.
-type progInfo struct {
-	p     *ast.Program
-	cName string
-	vars  map[string]*varInfo
-	order []*varInfo // порядок объявления — для struct, _init и драйвера
+// stateInfo — POU с состоянием (PROGRAM или FUNCTION_BLOCK) глазами
+// генератора: typedef struct + Name_init + функция шага. Форма у обоих одна
+// (решение 2), различается только имя функции шага: _step у PROGRAM,
+// _body у ФБ. Ключ vars — strings.ToUpper: ссылка TOTAL на объявленное total
+// обязана дать один и тот же C-идентификатор, иначе регистронезависимость
+// IEC сломает компиляцию C.
+type stateInfo struct {
+	stName   string
+	cName    string
+	stepName string // "step" у PROGRAM, "body" у ФБ
+	blocks   []*ast.VarBlock
+	body     []ast.Statement
+	vars     map[string]*varInfo
+	order    []*varInfo // порядок объявления — для struct, _init и драйвера
 }
 
-func newProgInfo(p *ast.Program) (*progInfo, error) {
-	cn, err := mapName(p.Name, p.Tok)
-	if err != nil {
-		return nil, err
-	}
-	info := &progInfo{p: p, cName: cn, vars: map[string]*varInfo{}}
+// collectVars строит таблицу переменных POU. Тип объявления, найденный в fbs,
+// делает переменную экземпляром ФБ (поле-struct во владельце); остальные
+// типы — скаляры, неизвестный скалярный тип отвергнет cType при эмиссии.
+func (info *stateInfo) collectVars(fbs map[string]*stateInfo) error {
+	info.vars = map[string]*varInfo{}
 	used := map[string]string{} // C-имя → ST-имя: ловим склейку после префиксации
-	for _, blk := range p.VarBlocks {
+	for _, blk := range info.blocks {
 		for _, d := range blk.Decls {
+			fb := fbs[strings.ToUpper(d.TypeName)]
 			for _, name := range d.Names {
 				cn, err := mapName(name.Name, name.Tok)
 				if err != nil {
-					return nil, err
+					return err
 				}
 				if prev, dup := used[cn]; dup {
-					return nil, fmt.Errorf("line %d:%d: codegen: renamed %q collides with %q (both map to C name %q)",
+					return fmt.Errorf("line %d:%d: codegen: renamed %q collides with %q (both map to C name %q)",
 						name.Tok.Line, name.Tok.Col, name.Name, prev, cn)
 				}
 				used[cn] = name.Name
-				vi := &varInfo{stName: name.Name, cName: cn, stType: d.TypeName, tok: name.Tok}
+				vi := &varInfo{stName: name.Name, cName: cn, stType: d.TypeName, fb: fb, tok: name.Tok}
 				info.vars[strings.ToUpper(name.Name)] = vi
 				info.order = append(info.order, vi)
 			}
 		}
 	}
-	return info, nil
+	return nil
 }
 
 // funcInfo — FUNCTION глазами генератора. Параметры — из блоков VAR_INPUT в
@@ -333,10 +391,16 @@ func (g *gen) linef(format string, args ...any) {
 
 func (g *gen) blank() { g.b.WriteByte('\n') }
 
-func (g *gen) emitTypedef(info *progInfo) error {
+func (g *gen) emitTypedef(info *stateInfo) error {
 	g.linef("typedef struct {")
 	g.ind++
 	for _, vi := range info.order {
+		if vi.fb != nil {
+			// Экземпляр ФБ — вложенный struct по значению; его typedef уже
+			// эмитнут раньше (топологический порядок в Generate).
+			g.linef("%s %s;", vi.fb.cName, vi.cName)
+			continue
+		}
 		ct, err := cType(vi.stType, vi.tok)
 		if err != nil {
 			return err
@@ -351,15 +415,20 @@ func (g *gen) emitTypedef(info *progInfo) error {
 // emitInit — Name_init (решение 3): инициализаторы — присваиваниями, без
 // инициализатора — явный 0 (сгенерированный C не зависит от содержимого
 // памяти вызывающего). Инициализатор объявления-списка (a, b, c : INT := 7)
-// применяется к каждому имени.
-func (g *gen) emitInit(info *progInfo) error {
+// применяется к каждому имени. Поле-экземпляр ФБ рекурсивно зовёт свой
+// _init (инициализатор у экземпляра отвергла sema).
+func (g *gen) emitInit(info *stateInfo) error {
 	g.vars, g.deref, g.forSeq = info.vars, true, 0
 	g.linef("void %s_init(%s *self) {", info.cName, info.cName)
 	g.ind++
-	for _, blk := range info.p.VarBlocks {
+	for _, blk := range info.blocks {
 		for _, d := range blk.Decls {
 			for _, name := range d.Names {
 				vi := info.vars[strings.ToUpper(name.Name)]
+				if vi.fb != nil {
+					g.linef("%s_init(&%s);", vi.fb.cName, g.ref(vi))
+					continue
+				}
 				if d.Init == nil {
 					g.linef("%s = 0;", g.ref(vi))
 					continue
@@ -377,11 +446,13 @@ func (g *gen) emitInit(info *progInfo) error {
 	return nil
 }
 
-func (g *gen) emitStep(info *progInfo) error {
+// emitStep — функция шага: тело POU со состоянием (Name_step у PROGRAM,
+// Name_body у ФБ); переменные — поля struct, обращение через self->.
+func (g *gen) emitStep(info *stateInfo) error {
 	g.vars, g.deref, g.forSeq = info.vars, true, 0
-	g.linef("void %s_step(%s *self) {", info.cName, info.cName)
+	g.linef("void %s_%s(%s *self) {", info.cName, info.stepName, info.cName)
 	g.ind++
-	if err := g.stmts(info.p.Body); err != nil {
+	if err := g.stmts(info.body); err != nil {
 		return err
 	}
 	g.ind--
@@ -452,8 +523,10 @@ func (g *gen) emitFunction(info *funcInfo) error {
 
 // emitDriver — main() по решению 4: _init, затем Scans вызовов _step, после
 // каждого — печать всех скалярных полей PROGRAM в порядке объявления, по
-// строке `имя=значение` с оригинальным ST-именем.
-func (g *gen) emitDriver(info *progInfo, scans int) {
+// строке `имя=значение` с оригинальным ST-именем. Поля-экземпляры ФБ не
+// разворачиваются: внутреннее состояние выводится наружу явно (`=>` или
+// присваивание из inst.member).
+func (g *gen) emitDriver(info *stateInfo, scans int) {
 	if scans <= 0 {
 		scans = 1
 	}
@@ -465,6 +538,9 @@ func (g *gen) emitDriver(info *progInfo, scans int) {
 	g.ind++
 	g.linef("%s_step(&st);", info.cName)
 	for _, vi := range info.order {
+		if vi.fb != nil {
+			continue
+		}
 		g.linef("printf(\"%s=%%d\\n\", st.%s);", vi.stName, vi.cName)
 	}
 	g.ind--
@@ -526,9 +602,63 @@ func (g *gen) stmt(s ast.Statement) error {
 	case *ast.ForStatement:
 		return g.forStmt(s)
 
+	case *ast.CallStatement:
+		return g.callStmt(s)
+
 	default:
 		return fmt.Errorf("line %d: codegen: unsupported statement %T", s.Line(), s)
 	}
+}
+
+// callStmt — вызов ФБ как оператор (этап 7): разворот в присваивания входов
+// (в порядке аргументов), вызов тела и выгрузку выходов (в порядке
+// аргументов). Что callee — экземпляр, аргументы только именованные, имена
+// существуют и направление верное — гарантирует sema; дыры здесь внутренние
+// ошибки.
+func (g *gen) callStmt(s *ast.CallStatement) error {
+	call := s.Call
+	id, ok := call.Callee.(*ast.Identifier)
+	if !ok {
+		return fmt.Errorf("line %d: codegen: unsupported call statement target %T", call.Line(), call.Callee)
+	}
+	vi := g.vars[strings.ToUpper(id.Name)]
+	if vi == nil || vi.fb == nil {
+		return fmt.Errorf("line %d: codegen: internal: %q is not a function block instance (sema must reject this)",
+			call.Line(), id.Name)
+	}
+	inst := g.ref(vi)
+	for _, a := range call.Args {
+		if a.Output {
+			continue
+		}
+		m := vi.fb.vars[strings.ToUpper(a.Name)]
+		if a.Name == "" || m == nil {
+			return fmt.Errorf("line %d: codegen: internal: bad input binding %q in call of %q (sema must reject this)",
+				call.Line(), a.Name, id.Name)
+		}
+		val, err := g.expr(a.Value)
+		if err != nil {
+			return err
+		}
+		g.linef("%s.%s = %s;", inst, m.cName, val)
+	}
+	g.linef("%s_%s(&%s);", vi.fb.cName, vi.fb.stepName, inst)
+	for _, a := range call.Args {
+		if !a.Output {
+			continue
+		}
+		m := vi.fb.vars[strings.ToUpper(a.Name)]
+		if m == nil {
+			return fmt.Errorf("line %d: codegen: internal: bad output binding %q in call of %q (sema must reject this)",
+				call.Line(), a.Name, id.Name)
+		}
+		target, err := g.expr(a.Value)
+		if err != nil {
+			return err
+		}
+		g.linef("%s = %s.%s;", target, inst, m.cName)
+	}
+	return nil
 }
 
 // constStepSign — знак шага FOR, когда он известен без вычисления: шаг
@@ -666,6 +796,26 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 
 	case *ast.CallExpr:
 		return g.call(e)
+
+	case *ast.MemberExpr:
+		// Доступ к члену экземпляра ФБ: чтение inst.Out в выражении и цель
+		// присваивания inst.In := … (обе формы идут через expr). Что база —
+		// экземпляр, член существует и направление верное — проверила sema.
+		id, ok := e.Base.(*ast.Identifier)
+		if !ok {
+			return "", fmt.Errorf("line %d: codegen: unsupported member access base %T", e.Line(), e.Base)
+		}
+		vi := g.vars[strings.ToUpper(id.Name)]
+		if vi == nil || vi.fb == nil {
+			return "", fmt.Errorf("line %d: codegen: internal: %q is not a function block instance (sema must reject this)",
+				e.Line(), id.Name)
+		}
+		m := vi.fb.vars[strings.ToUpper(e.Member)]
+		if m == nil {
+			return "", fmt.Errorf("line %d: codegen: internal: %q has no member %q (sema must reject this)",
+				e.Line(), id.Name, e.Member)
+		}
+		return g.ref(vi) + "." + m.cName, nil
 
 	default:
 		return "", fmt.Errorf("line %d: codegen: unsupported expression %T", e.Line(), e)

@@ -40,7 +40,9 @@ var update = flag.Bool("update", false, "перегенерировать golden
 // Этап 1: объявления, присваивания, выражения, IF, FOR. Этап 2: for_edge
 // (регрессия на границы INT — без широкого счётчика зависает, ловится
 // таймаутом) и четыре старых примера. Этап 5: func_simple (FUNCTION, вызовы,
-// раскладка именованных аргументов).
+// раскладка именованных аргументов). Этап 7: fb_counter (два независимых
+// экземпляра — на одном «состояние утекло в глобальную» не видна) и
+// fb_nested (рекурсивный _init, порядок typedef).
 var goldenExamples = []string{
 	"vars_all",
 	"expr_all",
@@ -51,6 +53,16 @@ var goldenExamples = []string{
 	"deeply_nested",
 	"for_edge",
 	"func_simple",
+	"fb_counter",
+	"fb_nested",
+}
+
+// exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
+// Смысл ФБ — состояние, переживающее скан, — виден только за несколько
+// сканов; значения по сканам выписаны в комментариях самих .st.
+var exampleScans = map[string]int{
+	"fb_counter": 3,
+	"fb_nested":  3,
 }
 
 // runTimeout — предел на запуск собранного бинаря: режим отказа сломанного
@@ -58,7 +70,7 @@ var goldenExamples = []string{
 const runTimeout = 10 * time.Second
 
 // generateExample — общий конвейер тестов: examples/<name>.st → C-текст
-// в режиме самодостаточного файла (-main, один скан).
+// в режиме самодостаточного файла (-main; число сканов — из exampleScans).
 func generateExample(t *testing.T, name string) string {
 	t.Helper()
 	src, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".st"))
@@ -73,7 +85,11 @@ func generateExample(t *testing.T, name string) string {
 	if errs := sema.Check(sf); len(errs) > 0 {
 		t.Fatalf("sema errors: %v", errs)
 	}
-	code, err := codegen.Generate(sf, codegen.Options{Main: true, Scans: 1})
+	scans := exampleScans[name]
+	if scans == 0 {
+		scans = 1
+	}
+	code, err := codegen.Generate(sf, codegen.Options{Main: true, Scans: scans})
 	if err != nil {
 		t.Fatalf("codegen error: %v", err)
 	}
