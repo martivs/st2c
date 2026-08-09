@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 
@@ -19,11 +20,21 @@ func main() {
 	scans := flag.Int("scans", 1, "сколько раз драйвер вызывает _step (только с -main)")
 	dumpAST := flag.Bool("dump-ast", false, "печатать AST вместо генерации C")
 	flag.Parse()
-	if flag.NArg() != 1 {
-		log.Fatal("usage: st2c [-o out.c] [-main] [-scans N] [-dump-ast] <file.st>")
+	if flag.NArg() > 1 {
+		log.Fatal("usage: st2c [-o out.c] [-main] [-scans N] [-dump-ast] [file.st]")
 	}
 
-	data, err := os.ReadFile(flag.Arg(0))
+	// Основной способ получить исходник — stdin: так его вызывает
+	// tools/tester (пишет ST в stdin процесса и закрывает канал, ждёт C на
+	// stdout). Позиционный аргумент file.st — вспомогательный, для ручного
+	// запуска и отладки (go run ./src examples/example.st и т.п.).
+	var data []byte
+	var err error
+	if flag.NArg() == 1 {
+		data, err = os.ReadFile(flag.Arg(0))
+	} else {
+		data, err = io.ReadAll(os.Stdin)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
