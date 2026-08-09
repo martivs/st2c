@@ -22,26 +22,43 @@ type Options struct {
 	Scans int  // сколько раз драйвер вызывает _step (флаг -scans; <=0 → 1)
 }
 
+// unit — один POU файла в порядке исходника; заполнено ровно одно поле.
+type unit struct {
+	prog *progInfo
+	fn   *funcInfo
+}
+
 // Generate превращает дерево в текст C-файла. Ошибки — имена и типы,
 // непредставимые в C, а также -main без единой PROGRAM в файле.
 func Generate(sf *ast.SourceFile, opts Options) (string, error) {
-	var infos []*progInfo
+	var units []unit
+	var progs []*progInfo
+	funcs := map[string]*funcInfo{}
 	for _, pou := range sf.POUs {
-		p, ok := pou.(*ast.Program)
-		if !ok {
+		switch p := pou.(type) {
+		case *ast.Program:
+			info, err := newProgInfo(p)
+			if err != nil {
+				return "", err
+			}
+			units = append(units, unit{prog: info})
+			progs = append(progs, info)
+		case *ast.Function:
+			info, err := newFuncInfo(p)
+			if err != nil {
+				return "", err
+			}
+			units = append(units, unit{fn: info})
+			funcs[strings.ToUpper(p.Name)] = info
+		default:
 			return "", fmt.Errorf("line %d: codegen: unsupported POU %T", pou.Line(), pou)
 		}
-		info, err := newProgInfo(p)
-		if err != nil {
-			return "", err
-		}
-		infos = append(infos, info)
 	}
-	if opts.Main && len(infos) == 0 {
+	if opts.Main && len(progs) == 0 {
 		return "", fmt.Errorf("codegen: -main requires a PROGRAM in the source file")
 	}
 
-	g := &gen{}
+	g := &gen{funcs: funcs}
 	g.linef("#include <stdint.h>")
 	if opts.Main {
 		g.linef("#include <stdio.h>")
@@ -50,27 +67,42 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 	// Два прохода (решение 5): сначала все typedef и прототипы, потом все
 	// тела — порядок POU в исходнике и взаимные ссылки перестают иметь
 	// значение.
-	for _, info := range infos {
+	for _, u := range units {
 		g.blank()
-		if err := g.emitTypedef(info); err != nil {
+		if u.fn != nil {
+			sig, err := funcSignature(u.fn)
+			if err != nil {
+				return "", err
+			}
+			g.linef("%s;", sig)
+			continue
+		}
+		if err := g.emitTypedef(u.prog); err != nil {
 			return "", err
 		}
-		g.linef("void %s_init(%s *self);", info.cName, info.cName)
-		g.linef("void %s_step(%s *self);", info.cName, info.cName)
+		g.linef("void %s_init(%s *self);", u.prog.cName, u.prog.cName)
+		g.linef("void %s_step(%s *self);", u.prog.cName, u.prog.cName)
 	}
-	for _, info := range infos {
+	for _, u := range units {
+		if u.fn != nil {
+			g.blank()
+			if err := g.emitFunction(u.fn); err != nil {
+				return "", err
+			}
+			continue
+		}
 		g.blank()
-		if err := g.emitInit(info); err != nil {
+		if err := g.emitInit(u.prog); err != nil {
 			return "", err
 		}
 		g.blank()
-		if err := g.emitStep(info); err != nil {
+		if err := g.emitStep(u.prog); err != nil {
 			return "", err
 		}
 	}
 	if opts.Main {
 		g.blank()
-		g.emitDriver(infos[0], opts.Scans)
+		g.emitDriver(progs[0], opts.Scans)
 	}
 	return g.b.String(), nil
 }
@@ -196,17 +228,101 @@ func newProgInfo(p *ast.Program) (*progInfo, error) {
 	return info, nil
 }
 
+// funcInfo — FUNCTION глазами генератора. Параметры — из блоков VAR_INPUT в
+// порядке объявления: порядок задаёт и сигнатуру C-функции, и раскладку
+// именованных аргументов в позиционные. Возвратная переменная одноимённа
+// функции (возврат по IEC — присваивание её имени: `Add := x + y;`) и в C
+// становится локальной, легально затеняющей саму функцию (рекурсию отсекла
+// sema). Состояния между вызовами у функции нет — struct не нужен.
+type funcInfo struct {
+	f      *ast.Function
+	cName  string
+	retVar *varInfo
+	params []*varInfo
+	vars   map[string]*varInfo
+}
+
+func newFuncInfo(f *ast.Function) (*funcInfo, error) {
+	cn, err := mapName(f.Name, f.Tok)
+	if err != nil {
+		return nil, err
+	}
+	info := &funcInfo{f: f, cName: cn, vars: map[string]*varInfo{}}
+	info.retVar = &varInfo{stName: f.Name, cName: cn, stType: f.ReturnType, tok: f.Tok}
+	info.vars[strings.ToUpper(f.Name)] = info.retVar
+	used := map[string]string{cn: f.Name}
+	for _, blk := range f.VarBlocks {
+		switch blk.Kind {
+		case ast.VarInput, ast.VarPlain, ast.VarTemp:
+		default:
+			return nil, fmt.Errorf("line %d:%d: codegen: %s block is not supported in FUNCTION",
+				blk.Tok.Line, blk.Tok.Col, blk.Kind)
+		}
+		for _, d := range blk.Decls {
+			for _, name := range d.Names {
+				cn, err := mapName(name.Name, name.Tok)
+				if err != nil {
+					return nil, err
+				}
+				if prev, dup := used[cn]; dup {
+					return nil, fmt.Errorf("line %d:%d: codegen: renamed %q collides with %q (both map to C name %q)",
+						name.Tok.Line, name.Tok.Col, name.Name, prev, cn)
+				}
+				used[cn] = name.Name
+				vi := &varInfo{stName: name.Name, cName: cn, stType: d.TypeName, tok: name.Tok}
+				info.vars[strings.ToUpper(name.Name)] = vi
+				if blk.Kind == ast.VarInput {
+					info.params = append(info.params, vi)
+				}
+			}
+		}
+	}
+	return info, nil
+}
+
+// funcSignature — заголовок C-функции, общий для прототипа и определения.
+func funcSignature(info *funcInfo) (string, error) {
+	ret, err := cType(info.f.ReturnType, info.f.Tok)
+	if err != nil {
+		return "", err
+	}
+	if len(info.params) == 0 {
+		return fmt.Sprintf("%s %s(void)", ret, info.cName), nil
+	}
+	parts := make([]string, len(info.params))
+	for i, p := range info.params {
+		ct, err := cType(p.stType, p.tok)
+		if err != nil {
+			return "", err
+		}
+		parts[i] = ct + " " + p.cName
+	}
+	return fmt.Sprintf("%s %s(%s)", ret, info.cName, strings.Join(parts, ", ")), nil
+}
+
 // ---------------------------------------------------------------------------
 // Эмиттер
 // ---------------------------------------------------------------------------
 
-// gen — состояние генерации: буфер, отступ, таблица имён текущего POU и
-// счётчик суффиксов временных FOR (уникальность при вложенности).
+// gen — состояние генерации: буфер, отступ, контекст текущего POU (таблица
+// имён + признак «переменные живут в struct состояния») и счётчик суффиксов
+// временных FOR (уникальность при вложенности).
 type gen struct {
 	b      strings.Builder
 	ind    int
-	cur    *progInfo
+	vars   map[string]*varInfo  // таблица имён текущего POU
+	deref  bool                 // true → обращение self->x (PROGRAM, позже ФБ); false → x (FUNCTION)
+	funcs  map[string]*funcInfo // функции файла (ключ ToUpper) — для эмиссии вызовов
 	forSeq int
+}
+
+// ref — C-обращение к переменной с учётом контекста POU: поле struct
+// состояния (`self->x`) либо локальная переменная функции (`x`).
+func (g *gen) ref(vi *varInfo) string {
+	if g.deref {
+		return "self->" + vi.cName
+	}
+	return vi.cName
 }
 
 func (g *gen) linef(format string, args ...any) {
@@ -237,7 +353,7 @@ func (g *gen) emitTypedef(info *progInfo) error {
 // памяти вызывающего). Инициализатор объявления-списка (a, b, c : INT := 7)
 // применяется к каждому имени.
 func (g *gen) emitInit(info *progInfo) error {
-	g.cur, g.forSeq = info, 0
+	g.vars, g.deref, g.forSeq = info.vars, true, 0
 	g.linef("void %s_init(%s *self) {", info.cName, info.cName)
 	g.ind++
 	for _, blk := range info.p.VarBlocks {
@@ -245,14 +361,14 @@ func (g *gen) emitInit(info *progInfo) error {
 			for _, name := range d.Names {
 				vi := info.vars[strings.ToUpper(name.Name)]
 				if d.Init == nil {
-					g.linef("self->%s = 0;", vi.cName)
+					g.linef("%s = 0;", g.ref(vi))
 					continue
 				}
 				val, err := g.expr(d.Init)
 				if err != nil {
 					return err
 				}
-				g.linef("self->%s = %s;", vi.cName, val)
+				g.linef("%s = %s;", g.ref(vi), val)
 			}
 		}
 	}
@@ -262,12 +378,73 @@ func (g *gen) emitInit(info *progInfo) error {
 }
 
 func (g *gen) emitStep(info *progInfo) error {
-	g.cur, g.forSeq = info, 0
+	g.vars, g.deref, g.forSeq = info.vars, true, 0
 	g.linef("void %s_step(%s *self) {", info.cName, info.cName)
 	g.ind++
 	if err := g.stmts(info.p.Body); err != nil {
 		return err
 	}
+	g.ind--
+	g.linef("}")
+	return nil
+}
+
+// emitFunction — FUNCTION как обычная C-функция (этап 5). Возвратная
+// переменная объявляется первой строкой и возвращается последней; локальные
+// из VAR/VAR_TEMP объявляются нулём, затем инициализаторы присваиваются в
+// порядке объявления — та же семантика, что у _init (sema разрешает
+// `x : INT := y;` до объявления y, инлайн-инициализатор в C тут сломался бы).
+// Инициализаторы VAR_INPUT игнорируются: значение параметра приходит от
+// вызывающего, все входы функции по sema обязательны (дефолты входов — долг).
+func (g *gen) emitFunction(info *funcInfo) error {
+	g.vars, g.deref, g.forSeq = info.vars, false, 0
+	sig, err := funcSignature(info)
+	if err != nil {
+		return err
+	}
+	g.linef("%s {", sig)
+	g.ind++
+	ret, err := cType(info.retVar.stType, info.retVar.tok)
+	if err != nil {
+		return err
+	}
+	g.linef("%s %s = 0;", ret, info.retVar.cName)
+	for _, blk := range info.f.VarBlocks {
+		if blk.Kind == ast.VarInput {
+			continue
+		}
+		for _, d := range blk.Decls {
+			for _, name := range d.Names {
+				vi := info.vars[strings.ToUpper(name.Name)]
+				ct, err := cType(vi.stType, vi.tok)
+				if err != nil {
+					return err
+				}
+				g.linef("%s %s = 0;", ct, vi.cName)
+			}
+		}
+	}
+	for _, blk := range info.f.VarBlocks {
+		if blk.Kind == ast.VarInput {
+			continue
+		}
+		for _, d := range blk.Decls {
+			if d.Init == nil {
+				continue
+			}
+			val, err := g.expr(d.Init)
+			if err != nil {
+				return err
+			}
+			for _, name := range d.Names {
+				g.linef("%s = %s;", info.vars[strings.ToUpper(name.Name)].cName, val)
+			}
+		}
+	}
+	if err := g.stmts(info.f.Body); err != nil {
+		return err
+	}
+	g.linef("return %s;", info.retVar.cName)
 	g.ind--
 	g.linef("}")
 	return nil
@@ -380,7 +557,7 @@ func constStepSign(e ast.Expression) (neg bool, ok bool) {
 // тернарником по знаку шага; при константном шаге тернарник свёрнут в
 // <= / >= (шаг 0 идёт по ветке >= 0 — как и в тернарнике).
 func (g *gen) forStmt(s *ast.ForStatement) error {
-	vi := g.cur.vars[strings.ToUpper(s.Var.Name)]
+	vi := g.vars[strings.ToUpper(s.Var.Name)]
 	if vi == nil {
 		return fmt.Errorf("line %d: codegen: internal: undeclared FOR variable %q (sema must reject this)",
 			s.Var.Line(), s.Var.Name)
@@ -424,7 +601,7 @@ func (g *gen) forStmt(s *ast.ForStatement) error {
 	}
 	g.linef("for (; %s; %s += %s) {", cond, i, st)
 	g.ind++
-	g.linef("self->%s = (%s)%s;", vi.cName, narrow, i)
+	g.linef("%s = (%s)%s;", g.ref(vi), narrow, i)
 	if err := g.stmts(s.Body); err != nil {
 		return err
 	}
@@ -452,12 +629,12 @@ var cOps = map[ast.Op]string{
 func (g *gen) expr(e ast.Expression) (string, error) {
 	switch e := e.(type) {
 	case *ast.Identifier:
-		vi := g.cur.vars[strings.ToUpper(e.Name)]
+		vi := g.vars[strings.ToUpper(e.Name)]
 		if vi == nil {
 			return "", fmt.Errorf("line %d: codegen: internal: undeclared variable %q (sema must reject this)",
 				e.Line(), e.Name)
 		}
-		return "self->" + vi.cName, nil
+		return g.ref(vi), nil
 
 	case *ast.IntLiteral:
 		return strconv.Itoa(e.Value), nil
@@ -487,7 +664,64 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 		}
 		return "(-" + operand + ")", nil
 
+	case *ast.CallExpr:
+		return g.call(e)
+
 	default:
 		return "", fmt.Errorf("line %d: codegen: unsupported expression %T", e.Line(), e)
 	}
+}
+
+// call — вызов функции в выражении: именованные аргументы раскладываются в
+// позиционные по порядку VAR_INPUT. Полноту, уникальность привязок и порядок
+// «позиционные раньше именованных» гарантирует sema — дыры здесь внутренние
+// ошибки. Собственных скобок вызову не нужно: это первичное выражение.
+func (g *gen) call(e *ast.CallExpr) (string, error) {
+	id, ok := e.Callee.(*ast.Identifier)
+	if !ok {
+		return "", fmt.Errorf("line %d: codegen: unsupported call target %T", e.Line(), e.Callee)
+	}
+	info, ok := g.funcs[strings.ToUpper(id.Name)]
+	if !ok {
+		return "", fmt.Errorf("line %d: codegen: internal: call of unknown function %q (sema must reject this)",
+			e.Line(), id.Name)
+	}
+	index := map[string]int{}
+	for i, p := range info.params {
+		index[strings.ToUpper(p.stName)] = i
+	}
+	args := make([]string, len(info.params))
+	bound := make([]bool, len(info.params))
+	for i, a := range e.Args {
+		if a.Output {
+			return "", fmt.Errorf("line %d: codegen: internal: output binding in call of function %q (sema must reject this)",
+				e.Line(), id.Name)
+		}
+		val, err := g.expr(a.Value)
+		if err != nil {
+			return "", err
+		}
+		slot := i
+		if a.Name != "" {
+			s, known := index[strings.ToUpper(a.Name)]
+			if !known {
+				return "", fmt.Errorf("line %d: codegen: internal: function %q has no input %q (sema must reject this)",
+					e.Line(), id.Name, a.Name)
+			}
+			slot = s
+		}
+		if slot >= len(args) || bound[slot] {
+			return "", fmt.Errorf("line %d: codegen: internal: bad argument binding in call of %q (sema must reject this)",
+				e.Line(), id.Name)
+		}
+		args[slot] = val
+		bound[slot] = true
+	}
+	for i := range bound {
+		if !bound[i] {
+			return "", fmt.Errorf("line %d: codegen: internal: input %q of %q not bound (sema must reject this)",
+				e.Line(), info.params[i].stName, id.Name)
+		}
+	}
+	return info.cName + "(" + strings.Join(args, ", ") + ")", nil
 }

@@ -39,7 +39,8 @@ var update = flag.Bool("update", false, "перегенерировать golden
 // goldenExamples — имена файлов examples/*.st, для которых есть эталоны.
 // Этап 1: объявления, присваивания, выражения, IF, FOR. Этап 2: for_edge
 // (регрессия на границы INT — без широкого счётчика зависает, ловится
-// таймаутом) и четыре старых примера.
+// таймаутом) и четыре старых примера. Этап 5: func_simple (FUNCTION, вызовы,
+// раскладка именованных аргументов).
 var goldenExamples = []string{
 	"vars_all",
 	"expr_all",
@@ -49,6 +50,7 @@ var goldenExamples = []string{
 	"nested_for_in_if",
 	"deeply_nested",
 	"for_edge",
+	"func_simple",
 }
 
 // runTimeout — предел на запуск собранного бинаря: режим отказа сломанного
@@ -159,6 +161,16 @@ func TestNameErrors(t *testing.T) {
 			name:       "неизвестный тип",
 			src:        "PROGRAM P\nVAR\nm : MyType;\nEND_VAR\nEND_PROGRAM",
 			wantSubstr: `line 3:1: codegen: no C mapping for type "MyType"`,
+		},
+		{
+			name:       "не-ASCII имя параметра функции",
+			src:        "FUNCTION F : INT\nVAR_INPUT\nпар : INT;\nEND_VAR\nF := 0;\nEND_FUNCTION\nPROGRAM P\nEND_PROGRAM",
+			wantSubstr: "line 3:1: codegen: identifier \"пар\" is not representable in C",
+		},
+		{
+			name:       "VAR_OUTPUT в FUNCTION",
+			src:        "FUNCTION F : INT\nVAR_OUTPUT\no : INT;\nEND_VAR\nF := 0;\nEND_FUNCTION\nPROGRAM P\nEND_PROGRAM",
+			wantSubstr: "line 2:1: codegen: VAR_OUTPUT block is not supported in FUNCTION",
 		},
 	}
 	for _, tc := range tests {
