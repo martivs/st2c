@@ -2,6 +2,11 @@
 #define MAINWINDOW_H
 
 #include <QMainWindow>
+#include <QCoreApplication>
+#include <QDir>
+#include <QProcess>
+#include <QMessageBox>
+
 
 QT_BEGIN_NAMESPACE
 namespace Ui {
@@ -21,6 +26,8 @@ private slots:
     void on_pushButtonOpen_clicked();
 
     void on_plainTextEditSource_textChanged();
+
+    void on_pushButtonTranslate_clicked();
 
 private:
     Ui::MainWindow *ui;
