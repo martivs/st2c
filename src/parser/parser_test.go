@@ -164,6 +164,20 @@ func TestExpressionStructure(t *testing.T) {
     Ident(b)
     Ident(c)`,
 		},
+		{
+			// Этап 1 REAL: вещественный литерал печатается исходным текстом,
+			// а не форматированным float64 (1.0E3 не превращается в 1000).
+			name: "вещественные литералы в выражении",
+			expr: "-3.14 * 1.0E3 + r / 1e-3",
+			want: `Binary(+)
+  Binary(*)
+    Unary(-)
+      Real(3.14)
+    Real(1.0E3)
+  Binary(/)
+    Ident(r)
+    Real(1e-3)`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -405,6 +419,15 @@ func TestVarBlocks(t *testing.T) {
 				"VarBlock(VAR RETAIN)\n  VarDecl(r : INT)",
 			},
 		},
+		{
+			name: "тип REAL с вещественным инициализатором",
+			vars: "VAR r : REAL := 2.5; a, b : real; END_VAR",
+			want: []string{`VarBlock(VAR)
+  VarDecl(r : REAL)
+    Init:
+      Real(2.5)
+  VarDecl(a, b : REAL)`},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -421,6 +444,46 @@ func TestVarBlocks(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRealLiteral: этап 1 REAL — литерал разбирается в RealLiteral с числовым
+// Value и исходным Text; REAL принимается как тип возврата FUNCTION.
+func TestRealLiteral(t *testing.T) {
+	t.Run("значение и текст литерала", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nr := 1.0E3;\nEND_PROGRAM")
+		assign := prog.Body[0].(*ast.AssignStatement)
+		lit, ok := assign.Value.(*ast.RealLiteral)
+		if !ok {
+			t.Fatalf("ожидался *ast.RealLiteral, получен %T", assign.Value)
+		}
+		if lit.Value != 1000 {
+			t.Errorf("Value: got %v, want 1000", lit.Value)
+		}
+		if lit.Text != "1.0E3" {
+			t.Errorf("Text: got %q, want %q", lit.Text, "1.0E3")
+		}
+		if lit.Line() != 2 {
+			t.Errorf("Line: got %d, want 2", lit.Line())
+		}
+	})
+	t.Run("REAL как тип возврата функции", func(t *testing.T) {
+		src := "FUNCTION Half : REAL\nVAR_INPUT x : REAL; END_VAR\nHalf := x / 2.0;\nEND_FUNCTION"
+		p := parser.New(lexer.New(src))
+		sf, err := p.ParseSourceFile()
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		fn, ok := sf.POUs[0].(*ast.Function)
+		if !ok {
+			t.Fatalf("ожидался *ast.Function, получен %T", sf.POUs[0])
+		}
+		if fn.ReturnType != "REAL" {
+			t.Errorf("ReturnType: got %q, want %q", fn.ReturnType, "REAL")
+		}
+		if got := fn.VarBlocks[0].Decls[0].TypeName; got != "REAL" {
+			t.Errorf("тип входа: got %q, want %q", got, "REAL")
+		}
+	})
 }
 
 // TestSourceFile: фаза 5 — корень дерева SourceFile, цикл по POU до EOF.
@@ -556,6 +619,18 @@ func TestParseErrors(t *testing.T) {
 			name:       "вызов-оператор без точки с запятой",
 			input:      "PROGRAM P\ninst(step := 1)\nEND_PROGRAM",
 			wantSubstr: `line 3: expected ;`,
+		},
+		{
+			// `1.` — не REAL по IEC: лексится как INT_LIT DOT, и парсер видит
+			// доступ к члену без имени.
+			name:       "точка без дробной части — не вещественный литерал",
+			input:      "PROGRAM P\nr := 1.;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected IDENT, got ;`,
+		},
+		{
+			name:       "вещественный литерал в начале оператора",
+			input:      "PROGRAM P\n3.14;\nEND_PROGRAM",
+			wantSubstr: `line 2: unexpected token REAL_LIT "3.14" at statement start`,
 		},
 	}
 	for _, tc := range tests {

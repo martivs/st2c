@@ -209,11 +209,12 @@ func (p *Parser) parseVarDecl() *ast.VarDecl {
 	return decl
 }
 
-// parseType — имя типа: ключевое слово INT или любой идентификатор
-// (пользовательский тип). Допустимость имени — задача sema, не парсера.
+// parseType — имя типа: ключевое слово встроенного типа (INT, REAL) или любой
+// идентификатор (пользовательский тип). Допустимость имени — задача sema, не
+// парсера.
 func (p *Parser) parseType() string {
 	switch p.cur.Type {
-	case lexer.INT, lexer.IDENT:
+	case lexer.INT, lexer.REAL, lexer.IDENT:
 		tok := p.cur
 		p.nextToken()
 		return tok.Literal
@@ -410,7 +411,8 @@ func (p *Parser) parseUnary() ast.Expression {
 	return p.parsePrimary()
 }
 
-// parsePrimary — атом (идентификатор, целый литерал, ( expression )) плюс
+// parsePrimary — атом (идентификатор, целый или вещественный литерал,
+// ( expression )) плюс
 // постфиксы: пока текущий токен `.` или `(`, атом наращивается в MemberExpr
 // (`inst.Out`) или CallExpr (`Add(1, 2)`). `(` после primary — постфиксный
 // оператор вызова из таблицы приоритетов Pratt (максимальный уровень —
@@ -434,6 +436,15 @@ func (p *Parser) parsePrimary() ast.Expression {
 			return nil
 		}
 		expr = &ast.IntLiteral{Value: val, Tok: tok}
+	case lexer.REAL_LIT:
+		tok := p.cur
+		p.nextToken()
+		val, convErr := strconv.ParseFloat(tok.Literal, 64)
+		if convErr != nil {
+			p.fail(fmt.Sprintf("invalid real literal %q", tok.Literal))
+			return nil
+		}
+		expr = &ast.RealLiteral{Value: val, Text: tok.Literal, Tok: tok}
 	case lexer.LPAREN:
 		p.nextToken()
 		expr = p.parseExpression(lowestPrec)

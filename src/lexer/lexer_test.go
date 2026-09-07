@@ -165,6 +165,40 @@ func TestAllTokens(t *testing.T) {
 			},
 		},
 		{
+			name:  "real literals: fraction and exponent",
+			input: "3.14 1.0E3 1e-3 2E+5 0.5 10.0",
+			want: []expTok{
+				{REAL_LIT, "3.14"}, {REAL_LIT, "1.0E3"}, {REAL_LIT, "1e-3"},
+				{REAL_LIT, "2E+5"}, {REAL_LIT, "0.5"}, {REAL_LIT, "10.0"},
+				{EOF, ""},
+			},
+		},
+		{
+			// Откаты readNumber: `.` без цифры за ней и `e` без цифры/знака
+			// с цифрой не входят в литерал.
+			name:  "number rollbacks: range dots, member dot, trailing dot, e-ident",
+			input: "1..10 x.y 1. 1EXIT 2e 3e+ r := 1.5;",
+			want: []expTok{
+				{INT_LIT, "1"}, {DOT, "."}, {DOT, "."}, {INT_LIT, "10"},
+				{IDENT, "x"}, {DOT, "."}, {IDENT, "y"},
+				{INT_LIT, "1"}, {DOT, "."},
+				{INT_LIT, "1"}, {IDENT, "EXIT"},
+				{INT_LIT, "2"}, {IDENT, "e"},
+				{INT_LIT, "3"}, {IDENT, "e"}, {PLUS, "+"},
+				{IDENT, "r"}, {ASSIGN, ":="}, {REAL_LIT, "1.5"}, {SEMICOLON, ";"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "REAL keyword",
+			input: "x : REAL := 2.5; y : real;",
+			want: []expTok{
+				{IDENT, "x"}, {COLON, ":"}, {REAL, "REAL"}, {ASSIGN, ":="}, {REAL_LIT, "2.5"}, {SEMICOLON, ";"},
+				{IDENT, "y"}, {COLON, ":"}, {REAL, "REAL"}, {SEMICOLON, ";"},
+				{EOF, ""},
+			},
+		},
+		{
 			name:  "assignment statement",
 			input: "sum := sum + x;",
 			want: []expTok{
@@ -318,9 +352,10 @@ func TestUnterminatedBlockComment(t *testing.T) {
 }
 
 // TestColumns: колонка — 1-based позиция начала токена в строке, сбрасывается
-// на каждом переводе строки.
+// на каждом переводе строки. Вещественный литерал — один токен, колонка
+// следующего за ним учитывает всю его длину.
 func TestColumns(t *testing.T) {
-	input := "x := 10;\n  sum := sum + 1;"
+	input := "x := 10;\n  sum := sum + 1;\nr := 1.5e2;"
 	want := []struct {
 		lit  string
 		line int
@@ -328,6 +363,7 @@ func TestColumns(t *testing.T) {
 	}{
 		{"x", 1, 1}, {":=", 1, 3}, {"10", 1, 6}, {";", 1, 8},
 		{"sum", 2, 3}, {":=", 2, 7}, {"sum", 2, 10}, {"+", 2, 14}, {"1", 2, 16}, {";", 2, 17},
+		{"r", 3, 1}, {":=", 3, 3}, {"1.5e2", 3, 6}, {";", 3, 11},
 	}
 	toks := collect(t, input)
 	if len(toks) != len(want)+1 { // +1 за EOF

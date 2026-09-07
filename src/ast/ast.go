@@ -388,6 +388,19 @@ func (e *IntLiteral) expressionNode() {}
 func (e *IntLiteral) Line() int       { return e.Tok.Line }
 func (e *IntLiteral) String() string  { return fmt.Sprintf("Int(%d)", e.Value) }
 
+// RealLiteral — вещественный литерал (3.14, 1.0E3, 1e-3). Text — исходное
+// написание: String() печатает его, а не Value, чтобы golden-эталоны .ast не
+// зависели от того, как Go форматирует float64.
+type RealLiteral struct {
+	Value float64
+	Text  string
+	Tok   lexer.Token
+}
+
+func (e *RealLiteral) expressionNode() {}
+func (e *RealLiteral) Line() int       { return e.Tok.Line }
+func (e *RealLiteral) String() string  { return fmt.Sprintf("Real(%s)", e.Text) }
+
 // BinaryExpr — бинарная операция: и арифметика (+ - * /), и сравнения
 // (> < = <= >= <>). Различаются полем Op. Приоритет операций задаётся не
 // типом узла, а формой дерева, которую строит parser.

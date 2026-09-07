@@ -11,8 +11,9 @@ const (
 	EOF     TokenType = iota
 	ILLEGAL           // неизвестный символ или незакрытый комментарий
 
-	IDENT   // идентификатор
-	INT_LIT // целочисленный литерал
+	IDENT    // идентификатор
+	INT_LIT  // целочисленный литерал
+	REAL_LIT // вещественный литерал: 3.14, 1.0E3, 1e-3
 
 	ASSIGN    // :=
 	PLUS      // +
@@ -44,6 +45,7 @@ const (
 	CONSTANT
 	RETAIN
 	INT
+	REAL
 	IF
 	THEN
 	ELSE
@@ -61,10 +63,11 @@ const (
 
 // tokenNames — имена типов токенов для печати. Ключевые слова сюда не
 // вписываются вручную — они добавляются из keywords в init(), чтобы каждое
-// новое слово правилось в одном месте.
+// новое слово правилось в одном месте. Всё остальное (литералы, операторы)
+// вписывается сюда руками, иначе String() вернёт UNKNOWN в сообщениях парсера.
 var tokenNames = map[TokenType]string{
 	EOF: "EOF", ILLEGAL: "ILLEGAL",
-	IDENT: "IDENT", INT_LIT: "INT_LIT",
+	IDENT: "IDENT", INT_LIT: "INT_LIT", REAL_LIT: "REAL_LIT",
 	ASSIGN: ":=", PLUS: "+", MINUS: "-", STAR: "*", SLASH: "/",
 	GT: ">", LT: "<", EQ: "=", LE: "<=", GE: ">=", NE: "<>",
 	COLON: ":", SEMICOLON: ";", COMMA: ",",
@@ -89,7 +92,7 @@ var keywords = map[string]TokenType{
 	"PROGRAM": PROGRAM, "END_PROGRAM": END_PROGRAM,
 	"VAR": VAR, "VAR_INPUT": VAR_INPUT, "VAR_OUTPUT": VAR_OUTPUT,
 	"VAR_IN_OUT": VAR_IN_OUT, "VAR_TEMP": VAR_TEMP, "END_VAR": END_VAR,
-	"CONSTANT": CONSTANT, "RETAIN": RETAIN, "INT": INT,
+	"CONSTANT": CONSTANT, "RETAIN": RETAIN, "INT": INT, "REAL": REAL,
 	"IF": IF, "THEN": THEN, "ELSE": ELSE, "END_IF": END_IF,
 	"FOR": FOR, "TO": TO, "BY": BY, "DO": DO, "END_FOR": END_FOR,
 	"FUNCTION": FUNCTION, "END_FUNCTION": END_FUNCTION,
@@ -203,7 +206,7 @@ func (l *Lexer) NextToken() Token {
 	case unicode.IsLetter(ch) || ch == '_':
 		return l.readIdent()
 	case unicode.IsDigit(ch):
-		return l.readInt()
+		return l.readNumber()
 	default:
 		l.pos++
 		return Token{Type: ILLEGAL, Literal: string(ch), Line: line, Col: col}
@@ -291,11 +294,62 @@ func (l *Lexer) readIdent() Token {
 	return Token{Type: IDENT, Literal: literal, Line: line, Col: col}
 }
 
-func (l *Lexer) readInt() Token {
+// readNumber — числовой литерал по грамматике IEC:
+//
+//	integer                      → INT_LIT
+//	integer '.' integer [exp]    → REAL_LIT
+//	integer exp                  → REAL_LIT,   exp = ('e'|'E') ['+'|'-'] integer
+//
+// Дробная часть и экспонента принимаются с откатом: `.` съедается, только
+// если за ней идёт цифра (иначе `1..10` будущего ARRAY и `1.` остаются
+// `INT_LIT DOT ...`), `e`/`E` — только если за ней идёт цифра или знак с
+// цифрой (иначе `1EXIT` остаётся `INT_LIT IDENT`). `1.` без дробной части по
+// IEC не REAL.
+func (l *Lexer) readNumber() Token {
 	line, col := l.line, l.col()
 	start := l.pos
+	l.skipDigits()
+	isReal := false
+
+	// Дробная часть: '.' digit+
+	if l.cur() == '.' && unicode.IsDigit(l.peek()) {
+		l.pos++ // '.'
+		l.skipDigits()
+		isReal = true
+	}
+
+	// Экспонента: ('e'|'E') ['+'|'-'] digit+
+	if e := l.cur(); e == 'e' || e == 'E' {
+		next := l.peek()
+		if unicode.IsDigit(next) {
+			l.pos++ // 'e'
+			l.skipDigits()
+			isReal = true
+		} else if (next == '+' || next == '-') && l.pos+2 < len(l.input) && unicode.IsDigit(l.input[l.pos+2]) {
+			l.pos += 2 // 'e' и знак
+			l.skipDigits()
+			isReal = true
+		}
+	}
+
+	tt := INT_LIT
+	if isReal {
+		tt = REAL_LIT
+	}
+	return Token{Type: tt, Literal: string(l.input[start:l.pos]), Line: line, Col: col}
+}
+
+// cur — текущая руна либо 0 на конце входа.
+func (l *Lexer) cur() rune {
+	if l.pos >= len(l.input) {
+		return 0
+	}
+	return l.input[l.pos]
+}
+
+// skipDigits продвигает позицию за подряд идущие цифры.
+func (l *Lexer) skipDigits() {
 	for l.pos < len(l.input) && unicode.IsDigit(l.input[l.pos]) {
 		l.pos++
 	}
-	return Token{Type: INT_LIT, Literal: string(l.input[start:l.pos]), Line: line, Col: col}
 }
