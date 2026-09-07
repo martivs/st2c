@@ -48,8 +48,9 @@ func main() {
 	}
 
 	// Семантический анализ: в отличие от fail-fast парсера печатаются все
-	// найденные ошибки за один запуск.
-	if errs := sema.Check(sf); len(errs) > 0 {
+	// найденные ошибки за один запуск. Side-table типов (sema.Info) codegen
+	// начнёт получать на этапе 3 плана REAL.
+	if _, errs := sema.Check(sf); len(errs) > 0 {
 		for _, e := range errs {
 			fmt.Fprintln(os.Stderr, e)
 		}

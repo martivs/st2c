@@ -82,7 +82,7 @@ func generateExample(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	if errs := sema.Check(sf); len(errs) > 0 {
+	if _, errs := sema.Check(sf); len(errs) > 0 {
 		t.Fatalf("sema errors: %v", errs)
 	}
 	scans := exampleScans[name]
@@ -202,7 +202,7 @@ func TestNameErrors(t *testing.T) {
 				t.Fatalf("parse error: %v", err)
 			}
 			if !tc.skipSema {
-				if errs := sema.Check(sf); len(errs) > 0 {
+				if _, errs := sema.Check(sf); len(errs) > 0 {
 					t.Fatalf("sema errors: %v", errs)
 				}
 			}
