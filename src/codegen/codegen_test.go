@@ -82,14 +82,15 @@ func generateExample(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
 	}
-	if _, errs := sema.Check(sf); len(errs) > 0 {
+	info, errs := sema.Check(sf)
+	if len(errs) > 0 {
 		t.Fatalf("sema errors: %v", errs)
 	}
 	scans := exampleScans[name]
 	if scans == 0 {
 		scans = 1
 	}
-	code, err := codegen.Generate(sf, codegen.Options{Main: true, Scans: scans})
+	code, err := codegen.Generate(sf, info, codegen.Options{Main: true, Scans: scans})
 	if err != nil {
 		t.Fatalf("codegen error: %v", err)
 	}
@@ -201,12 +202,14 @@ func TestNameErrors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse error: %v", err)
 			}
+			var info *sema.Info // nil при skipSema — Generate обязан это допускать
 			if !tc.skipSema {
-				if _, errs := sema.Check(sf); len(errs) > 0 {
+				var errs []error
+				if info, errs = sema.Check(sf); len(errs) > 0 {
 					t.Fatalf("sema errors: %v", errs)
 				}
 			}
-			_, err = codegen.Generate(sf, codegen.Options{})
+			_, err = codegen.Generate(sf, info, codegen.Options{})
 			if err == nil {
 				t.Fatalf("ожидалась ошибка с подстрокой %q, генерация прошла", tc.wantSubstr)
 			}

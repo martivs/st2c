@@ -14,6 +14,7 @@ import (
 
 	"st2c/src/ast"
 	"st2c/src/lexer"
+	"st2c/src/sema"
 )
 
 // Options — режим генерации.
@@ -28,9 +29,16 @@ type unit struct {
 	fn    *funcInfo
 }
 
-// Generate превращает дерево в текст C-файла. Ошибки — имена и типы,
-// непредставимые в C, а также -main без единой PROGRAM в файле.
-func Generate(sf *ast.SourceFile, opts Options) (string, error) {
+// Generate превращает дерево в текст C-файла. info — side-table sema (типы
+// выражений: по ней целый литерал в контексте REAL эмитится вещественным;
+// список реально вызванных встроенных конверсий: по нему в пролог попадает
+// хелпер округления). nil допустим — генерация без sema, как в негативных
+// тестах codegen: литералы тогда целые, хелперы не эмитятся. Ошибки — имена
+// и типы, непредставимые в C, а также -main без единой PROGRAM в файле.
+func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error) {
+	if info == nil {
+		info = &sema.Info{}
+	}
 	// Оболочки ФБ строятся до всего остального: экземпляр может быть объявлен
 	// выше своего FUNCTION_BLOCK по файлу, а collectVars любого POU должен
 	// уметь отличить тип-ФБ от скаляра.
@@ -86,10 +94,13 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 		return "", fmt.Errorf("codegen: -main requires a PROGRAM in the source file")
 	}
 
-	g := &gen{funcs: funcs}
+	g := &gen{funcs: funcs, info: info}
 	g.linef("#include <stdint.h>")
 	if opts.Main {
 		g.linef("#include <stdio.h>")
+	}
+	if err := g.emitHelpers(); err != nil {
+		return "", err
 	}
 
 	// Два прохода (решение 5): сначала все typedef и прототипы, потом все
@@ -153,7 +164,9 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 	}
 	if opts.Main {
 		g.blank()
-		g.emitDriver(progs[0], opts.Scans)
+		if err := g.emitDriver(progs[0], opts.Scans); err != nil {
+			return "", err
+		}
 	}
 	return g.b.String(), nil
 }
@@ -162,16 +175,35 @@ func Generate(sf *ast.SourceFile, opts Options) (string, error) {
 // Типы: единственная точка маппинга ST → C
 // ---------------------------------------------------------------------------
 
-// cTypes — таблица маппинга типов; литерала "int16_t" нет больше нигде.
-// Ключ — верхний регистр (имена типов IEC регистронезависимы).
+// cTypes — таблица маппинга типов; литералов "int16_t"/"float" нет больше
+// нигде. Ключ — верхний регистр (имена типов IEC регистронезависимы).
+// REAL → float (32 бита по IEC; LREAL → double оставлен на будущее).
 var cTypes = map[string]string{
-	"INT": "int16_t",
+	"INT":  "int16_t",
+	"REAL": "float",
 }
 
 // cWideTypes — тип счётчика FOR: шире переменной цикла, чтобы прибавление
-// шага у границы диапазона не переполнялось (решение 6).
+// шага у границы диапазона не переполнялось (решение 6). REAL здесь нет
+// сознательно: FOR по REAL отвергает sema, а ошибка cWideType остаётся
+// внутренней защитой.
 var cWideTypes = map[string]string{
 	"INT": "int32_t",
+}
+
+// cZeros — нулевое значение типа: явная инициализация полей без
+// инициализатора и локальных переменных функции (решение 3).
+var cZeros = map[string]string{
+	"INT":  "0",
+	"REAL": "0.0f",
+}
+
+// cFormats — спецификатор printf для печати поля драйвером -main. Формат —
+// часть контракта .expected: %d для INT (int16_t промоутится до int), %g для
+// REAL (шесть значащих цифр; float → double в varargs штатный).
+var cFormats = map[string]string{
+	"INT":  "%d",
+	"REAL": "%g",
 }
 
 func cType(typeName string, tok lexer.Token) (string, error) {
@@ -186,6 +218,35 @@ func cWideType(typeName string, tok lexer.Token) (string, error) {
 		return t, nil
 	}
 	return "", fmt.Errorf("line %d:%d: codegen: no C mapping for type %q", tok.Line, tok.Col, typeName)
+}
+
+// zeroLiteral — нулевое значение для типа объявления. Тип к этому моменту
+// уже прошёл cType (typedef или сигнатура), так что "0" — недостижимый
+// запасной вариант.
+func zeroLiteral(typeName string) string {
+	if z, ok := cZeros[strings.ToUpper(typeName)]; ok {
+		return z
+	}
+	return "0"
+}
+
+func cFormat(typeName string, tok lexer.Token) (string, error) {
+	if f, ok := cFormats[strings.ToUpper(typeName)]; ok {
+		return f, nil
+	}
+	return "", fmt.Errorf("line %d:%d: codegen: no printf format for type %q", tok.Line, tok.Col, typeName)
+}
+
+// cFloatLit — C-литерал float: кратчайшее написание, восстанавливающее
+// значение в float32; если в нём нет ни точки, ни экспоненты (2.0 → "2"),
+// дописывается ".0" — иначе "2f" в C невалидно. Суффикс f не даёт
+// double-арифметики с последующим усечением.
+func cFloatLit(v float64) string {
+	s := strconv.FormatFloat(v, 'g', -1, 32)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s + "f"
 }
 
 // ---------------------------------------------------------------------------
@@ -210,8 +271,9 @@ var reservedCNames = map[string]bool{
 	"int8_t": true, "int16_t": true, "int32_t": true, "int64_t": true,
 	"uint8_t": true, "uint16_t": true, "uint32_t": true, "uint64_t": true,
 	"intmax_t": true, "uintmax_t": true, "intptr_t": true, "uintptr_t": true,
-	// окружение генератора
-	"main": true, "self": true,
+	// окружение генератора: main (драйвер -main), self (параметр
+	// init/step), st_real_to_int (хелпер конверсии REAL_TO_INT в прологе)
+	"main": true, "self": true, "st_real_to_int": true,
 }
 
 // mapName возвращает C-имя для ST-идентификатора. Совпадение с таблицей или
@@ -371,7 +433,39 @@ type gen struct {
 	vars   map[string]*varInfo  // таблица имён текущего POU
 	deref  bool                 // true → обращение self->x (PROGRAM, позже ФБ); false → x (FUNCTION)
 	funcs  map[string]*funcInfo // функции файла (ключ ToUpper) — для эмиссии вызовов
+	info   *sema.Info           // side-table sema: типы выражений, вызванные builtins
 	forSeq int
+}
+
+// realToIntHelper — имя static-хелпера округления для REAL_TO_INT; занесено
+// в reservedCNames, чтобы одноимённый пользовательский идентификатор ушёл
+// в st_st_real_to_int.
+const realToIntHelper = "st_real_to_int"
+
+// emitHelpers — пролог после #include: встроенные конверсии, требующие
+// кода. INT_TO_REAL — просто приведение (float), а REAL_TO_INT — округление
+// к ближайшему по IEC; без <math.h> и -lm (lroundf не слинкуется в TestGCC).
+// Хелпер эмитится только при фактическом вызове (Info.UsedBuiltins): иначе
+// -Wall даст -Wunused-function.
+func (g *gen) emitHelpers() error {
+	if !g.info.UsedBuiltins["REAL_TO_INT"] {
+		return nil
+	}
+	intT, err := cType("INT", lexer.Token{})
+	if err != nil {
+		return err
+	}
+	realT, err := cType("REAL", lexer.Token{})
+	if err != nil {
+		return err
+	}
+	g.blank()
+	g.linef("static %s %s(%s v) {", intT, realToIntHelper, realT)
+	g.ind++
+	g.linef("return (%s)(v >= 0.0f ? v + 0.5f : v - 0.5f);", intT)
+	g.ind--
+	g.linef("}")
+	return nil
 }
 
 // ref — C-обращение к переменной с учётом контекста POU: поле struct
@@ -430,7 +524,7 @@ func (g *gen) emitInit(info *stateInfo) error {
 					continue
 				}
 				if d.Init == nil {
-					g.linef("%s = 0;", g.ref(vi))
+					g.linef("%s = %s;", g.ref(vi), zeroLiteral(vi.stType))
 					continue
 				}
 				val, err := g.expr(d.Init)
@@ -479,7 +573,7 @@ func (g *gen) emitFunction(info *funcInfo) error {
 	if err != nil {
 		return err
 	}
-	g.linef("%s %s = 0;", ret, info.retVar.cName)
+	g.linef("%s %s = %s;", ret, info.retVar.cName, zeroLiteral(info.retVar.stType))
 	for _, blk := range info.f.VarBlocks {
 		if blk.Kind == ast.VarInput {
 			continue
@@ -491,7 +585,7 @@ func (g *gen) emitFunction(info *funcInfo) error {
 				if err != nil {
 					return err
 				}
-				g.linef("%s %s = 0;", ct, vi.cName)
+				g.linef("%s %s = %s;", ct, vi.cName, zeroLiteral(vi.stType))
 			}
 		}
 	}
@@ -523,10 +617,10 @@ func (g *gen) emitFunction(info *funcInfo) error {
 
 // emitDriver — main() по решению 4: _init, затем Scans вызовов _step, после
 // каждого — печать всех скалярных полей PROGRAM в порядке объявления, по
-// строке `имя=значение` с оригинальным ST-именем. Поля-экземпляры ФБ не
-// разворачиваются: внутреннее состояние выводится наружу явно (`=>` или
-// присваивание из inst.member).
-func (g *gen) emitDriver(info *stateInfo, scans int) {
+// строке `имя=значение` с оригинальным ST-именем; спецификатор — по типу
+// поля из cFormats. Поля-экземпляры ФБ не разворачиваются: внутреннее
+// состояние выводится наружу явно (`=>` или присваивание из inst.member).
+func (g *gen) emitDriver(info *stateInfo, scans int) error {
 	if scans <= 0 {
 		scans = 1
 	}
@@ -541,13 +635,18 @@ func (g *gen) emitDriver(info *stateInfo, scans int) {
 		if vi.fb != nil {
 			continue
 		}
-		g.linef("printf(\"%s=%%d\\n\", st.%s);", vi.stName, vi.cName)
+		format, err := cFormat(vi.stType, vi.tok)
+		if err != nil {
+			return err
+		}
+		g.linef("printf(\"%s=%s\\n\", st.%s);", vi.stName, format, vi.cName)
 	}
 	g.ind--
 	g.linef("}")
 	g.linef("return 0;")
 	g.ind--
 	g.linef("}")
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -767,7 +866,16 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 		return g.ref(vi), nil
 
 	case *ast.IntLiteral:
+		// Адаптивный литерал (решение 2 плана REAL): в контексте REAL sema
+		// записала литералу тип Real — эмитим вещественный (`r := 1 / 2`
+		// даёт `(1.0f / 2.0f)`, вещественное деление).
+		if g.info.Types[e] == sema.Real {
+			return cFloatLit(float64(e.Value)), nil
+		}
 		return strconv.Itoa(e.Value), nil
+
+	case *ast.RealLiteral:
+		return cFloatLit(e.Value), nil
 
 	case *ast.BinaryExpr:
 		left, err := g.expr(e.Left)
@@ -833,8 +941,7 @@ func (g *gen) call(e *ast.CallExpr) (string, error) {
 	}
 	info, ok := g.funcs[strings.ToUpper(id.Name)]
 	if !ok {
-		return "", fmt.Errorf("line %d: codegen: internal: call of unknown function %q (sema must reject this)",
-			e.Line(), id.Name)
+		return g.builtinCall(e, id)
 	}
 	index := map[string]int{}
 	for i, p := range info.params {
@@ -874,4 +981,39 @@ func (g *gen) call(e *ast.CallExpr) (string, error) {
 		}
 	}
 	return info.cName + "(" + strings.Join(args, ", ") + ")", nil
+}
+
+// builtinCall — встроенные конверсии (решение 4 плана REAL): INT_TO_REAL —
+// приведение к C-типу REAL, REAL_TO_INT — хелпер округления из пролога
+// (emitHelpers). Ровно один позиционный аргумент верного типа гарантирует
+// sema; имя, не найденное ни среди функций файла, ни здесь, — внутренняя
+// ошибка.
+func (g *gen) builtinCall(e *ast.CallExpr, id *ast.Identifier) (string, error) {
+	var wrap func(arg string) (string, error)
+	switch strings.ToUpper(id.Name) {
+	case "INT_TO_REAL":
+		wrap = func(arg string) (string, error) {
+			realT, err := cType("REAL", id.Tok)
+			if err != nil {
+				return "", err
+			}
+			return "((" + realT + ")(" + arg + "))", nil
+		}
+	case "REAL_TO_INT":
+		wrap = func(arg string) (string, error) {
+			return realToIntHelper + "(" + arg + ")", nil
+		}
+	default:
+		return "", fmt.Errorf("line %d: codegen: internal: call of unknown function %q (sema must reject this)",
+			e.Line(), id.Name)
+	}
+	if len(e.Args) != 1 || e.Args[0].Name != "" || e.Args[0].Output {
+		return "", fmt.Errorf("line %d: codegen: internal: bad argument list in call of built-in %q (sema must reject this)",
+			e.Line(), id.Name)
+	}
+	arg, err := g.expr(e.Args[0].Value)
+	if err != nil {
+		return "", err
+	}
+	return wrap(arg)
 }

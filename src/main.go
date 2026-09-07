@@ -48,9 +48,10 @@ func main() {
 	}
 
 	// Семантический анализ: в отличие от fail-fast парсера печатаются все
-	// найденные ошибки за один запуск. Side-table типов (sema.Info) codegen
-	// начнёт получать на этапе 3 плана REAL.
-	if _, errs := sema.Check(sf); len(errs) > 0 {
+	// найденные ошибки за один запуск. Side-table типов (sema.Info) уходит
+	// в codegen: по ней эмитятся адаптивные литералы и хелперы конверсий.
+	info, errs := sema.Check(sf)
+	if len(errs) > 0 {
 		for _, e := range errs {
 			fmt.Fprintln(os.Stderr, e)
 		}
@@ -65,7 +66,7 @@ func main() {
 		return
 	}
 
-	code, err := codegen.Generate(sf, codegen.Options{Main: *withMain, Scans: *scans})
+	code, err := codegen.Generate(sf, info, codegen.Options{Main: *withMain, Scans: *scans})
 	if err != nil {
 		log.Fatal(err)
 	}
