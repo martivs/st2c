@@ -754,6 +754,209 @@ END_PROGRAM`,
 	}
 }
 
+// TestReal — этап 4 плана REAL: дополняет TestTypes (не дублирует) кейсами
+// в контекстах, которых там нет: тела FUNCTION и FUNCTION_BLOCK, члены
+// экземпляров, вызовы функций в условии и в операндах, литералы под знаком и
+// с экспонентой, адаптивный литерал в аргументах конверсий и во входах ФБ,
+// отсутствие каскада у нерезолвящегося типа возврата.
+func TestReal(t *testing.T) {
+	// Функция с REAL-параметром (строки 1–4) и ФБ с REAL-входом и
+	// REAL-выходом (строки 5–9); программа за ними начинается со строки 10.
+	const pous = `FUNCTION Half : REAL
+VAR_INPUT x : REAL; END_VAR
+Half := x / 2;
+END_FUNCTION
+FUNCTION_BLOCK Integ
+VAR_INPUT v : REAL; END_VAR
+VAR_OUTPUT total : REAL; END_VAR
+total := total + v;
+END_FUNCTION_BLOCK
+`
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			// Позитив: адаптивный литерал в инициализаторе (`:= 0`), в делении
+			// (`1 / 2` — вещественное), под скобками, в REAL-локальной
+			// функции, во входе ФБ (`g(v := 1)`, `g.v := 2`), в аргументе
+			// конверсии (`REAL_TO_INT(3)`); минус над вызовом; цепочка
+			// конверсий; экспонента в инициализаторе ФБ; условие по члену.
+			// `i := 1 / 2` в INT-контексте остаётся целочисленным делением.
+			name: "корректная программа: REAL во всех контекстах",
+			src: `FUNCTION Half : REAL
+VAR_INPUT x : REAL; END_VAR
+VAR t : REAL := 3; END_VAR
+Half := x / t;
+END_FUNCTION
+FUNCTION_BLOCK Integ
+VAR_INPUT v : REAL; END_VAR
+VAR_OUTPUT total : REAL; END_VAR
+VAR dt : REAL := 2.5E-1; END_VAR
+total := total + v * dt;
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR r : REAL := 0; s : REAL := -1.5; i : INT; g : Integ; END_VAR
+r := 1 / 2;
+r := (1 + 2) / 4;
+r := -Half(r);
+r := INT_TO_REAL(REAL_TO_INT(r));
+i := REAL_TO_INT(3);
+g(v := 1);
+g.v := 2;
+g(total => r);
+IF g.total > 0 THEN r := g.total; END_IF
+i := 1 / 2;
+END_PROGRAM`,
+		},
+		{
+			name: "INT-вход в REAL-возврат функции",
+			src:  "FUNCTION F : REAL\nVAR_INPUT i : INT; END_VAR\nF := i;\nEND_FUNCTION",
+			want: []string{`line 3:1: cannot assign INT to "F" of type REAL (use INT_TO_REAL / REAL_TO_INT)`},
+		},
+		{
+			name: "смешение в теле ФБ",
+			src:  "FUNCTION_BLOCK B\nVAR_INPUT v : REAL; END_VAR\nVAR n : INT; END_VAR\nn := n + v;\nEND_FUNCTION_BLOCK",
+			want: []string{`line 4:8: operands of "+" have different types: INT and REAL (use INT_TO_REAL / REAL_TO_INT)`},
+		},
+		{
+			// Тип члена и тип возврата функции участвуют в выводе как
+			// операнды; `i + 1` берёт подсказку от i, а не от r слева.
+			name: "смешение через член экземпляра, результат функции и подвыражение",
+			src: pous + `PROGRAM P
+VAR r : REAL; i : INT; g : Integ; END_VAR
+r := g.total * i;
+i := Half(r) + i;
+IF r > i + 1 THEN i := 0; END_IF
+END_PROGRAM`,
+			want: []string{
+				`line 12:14: operands of "*" have different types: REAL and INT`,
+				`line 13:14: operands of "+" have different types: REAL and INT`,
+				`line 14:6: operands of ">" have different types: REAL and INT`,
+			},
+		},
+		{
+			name: "условие IF не BOOL: член, вызов, вещественный литерал",
+			src: pous + `PROGRAM P
+VAR r : REAL; g : Integ; END_VAR
+IF g.total THEN r := 1.0; END_IF
+IF Half(r) THEN r := 1.0; END_IF
+IF 2.5 THEN r := 1.0; END_IF
+END_PROGRAM`,
+			want: []string{
+				`line 12:4: IF condition must be BOOL (a comparison), got REAL`,
+				`line 13:4: IF condition must be BOOL (a comparison), got REAL`,
+				`line 14:4: IF condition must be BOOL (a comparison), got REAL`,
+			},
+		},
+		{
+			name: "FOR по INT с REAL-границей и отрицательным вещественным шагом",
+			src: `PROGRAM P
+VAR i : INT; r : REAL; END_VAR
+FOR i := 1 TO r DO i := i; END_FOR
+FOR i := 1 TO 2 BY -0.5 DO i := i; END_FOR
+END_PROGRAM`,
+			want: []string{
+				`line 3:15: FOR end must be INT, got REAL`,
+				`line 4:20: FOR step must be INT, got REAL`,
+			},
+		},
+		{
+			// Ошибка одна — на литерале под минусом; граничные значения
+			// float и экспонента законны.
+			name: "диапазон REAL-литерала: под минусом, границы, экспонента",
+			src: `PROGRAM P
+VAR r : REAL; END_VAR
+r := -1e39;
+r := 3.4e38;
+r := 1.5E3;
+r := -3.4028235e38;
+END_PROGRAM`,
+			want: []string{`line 3:7: literal 1e39 out of range for REAL`},
+		},
+		{
+			// Целый литерал в аргументе REAL_TO_INT адаптируется к REAL —
+			// следствие решения об адаптивном литерале, не ошибка.
+			name: "конверсии: позитив, адаптивный литерал в аргументе, цепочка",
+			src: `PROGRAM P
+VAR r : REAL; i : INT; END_VAR
+r := INT_TO_REAL(3);
+i := REAL_TO_INT(3);
+i := REAL_TO_INT(2.5);
+r := INT_TO_REAL(REAL_TO_INT(r));
+r := INT_TO_REAL(i) / 2;
+END_PROGRAM`,
+		},
+		{
+			name: "конверсии: неверный тип выражения-аргумента",
+			src: `PROGRAM P
+VAR r : REAL; i : INT; END_VAR
+r := INT_TO_REAL(r * 2);
+i := REAL_TO_INT(i + 1);
+END_PROGRAM`,
+			want: []string{
+				`line 3:17: argument of "INT_TO_REAL" must be INT, got REAL`,
+				`line 4:17: argument of "REAL_TO_INT" must be REAL, got INT`,
+			},
+		},
+		{
+			name: "функция с REAL и INT входами: адаптивный литерал и REAL-литерал в INT-вход",
+			src: `FUNCTION Scale : REAL
+VAR_INPUT v : REAL; k : INT; END_VAR
+Scale := v * INT_TO_REAL(k);
+END_FUNCTION
+PROGRAM P
+VAR r : REAL; END_VAR
+r := Scale(1, 2);
+r := Scale(1.0, 2.0);
+END_PROGRAM`,
+			want: []string{`line 8:11: argument for input "k" of function "Scale" must be INT, got REAL (use INT_TO_REAL / REAL_TO_INT)`},
+		},
+		{
+			name: "REAL-литерал во вход INT ФБ: вызов и член",
+			src: `FUNCTION_BLOCK C
+VAR_INPUT step : INT; END_VAR
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR c : C; END_VAR
+c(step := 1.5);
+c.step := 2.5;
+END_PROGRAM`,
+			want: []string{
+				`line 6:2: input "step" of "C" must be INT, got REAL (use INT_TO_REAL / REAL_TO_INT)`,
+				`line 7:1: cannot assign REAL to "c.step" of type INT`,
+			},
+		},
+		{
+			// Ошибка одна — на объявлении функции; ни `F := 1` в теле, ни
+			// `F() + 1` в месте вызова каскада не дают.
+			name: "нерезолвящийся тип возврата — без каскада в теле и в месте вызова",
+			src: `FUNCTION F : Widget
+F := 1;
+END_FUNCTION
+PROGRAM P
+VAR r : REAL; END_VAR
+r := F() + 1;
+END_PROGRAM`,
+			want: []string{`line 1:1: unknown type "Widget"`},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := check(t, tc.src)
+			if len(errs) != len(tc.want) {
+				t.Fatalf("ошибок: got %d, want %d\ngot: %v", len(errs), len(tc.want), errs)
+			}
+			for i, sub := range tc.want {
+				if !strings.Contains(errs[i].Error(), sub) {
+					t.Errorf("ошибка %d: %q не содержит %q", i, errs[i].Error(), sub)
+				}
+			}
+		})
+	}
+}
+
 // TestInfo — side-table: адаптивные литералы получают тип контекста (в
 // том числе под унарным минусом), сравнение — BOOL, вызванные конверсии
 // попадают в UsedBuiltins.

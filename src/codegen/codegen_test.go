@@ -42,7 +42,9 @@ var update = flag.Bool("update", false, "перегенерировать golden
 // таймаутом) и четыре старых примера. Этап 5: func_simple (FUNCTION, вызовы,
 // раскладка именованных аргументов). Этап 7: fb_counter (два независимых
 // экземпляра — на одном «состояние утекло в глобальную» не видна) и
-// fb_nested (рекурсивный _init, порядок typedef).
+// fb_nested (рекурсивный _init, порядок typedef). REAL этап 4: real_all
+// (float-поля, адаптивные литералы, конверсии с хелпером округления, %g в
+// драйвере — все величины точны в двоичном представлении).
 var goldenExamples = []string{
 	"vars_all",
 	"expr_all",
@@ -55,6 +57,7 @@ var goldenExamples = []string{
 	"func_simple",
 	"fb_counter",
 	"fb_nested",
+	"real_all",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).

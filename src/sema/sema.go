@@ -980,10 +980,13 @@ func (c *checker) checkIntRange(v int64, tok lexer.Token, want TypeKind) {
 	}
 }
 
-// checkRealRange — вещественный литерал обязан помещаться в float
-// (REAL — 32 бита по IEC, решение 3 плана REAL).
+// checkRealRange — вещественный литерал обязан помещаться в float (REAL —
+// 32 бита по IEC). Критерий — представимость: округление к float32 не даёт
+// бесконечности. Сравнение с MaxFloat32 в float64 отвергло бы сам максимум
+// `3.4028235e38`: его десятичная запись чуть больше точного значения, хотя
+// в float32 округляется ровно к нему.
 func (c *checker) checkRealRange(lit *ast.RealLiteral) {
-	if math.IsInf(lit.Value, 0) || math.Abs(lit.Value) > math.MaxFloat32 {
+	if math.IsInf(float64(float32(lit.Value)), 0) {
 		c.errorf(lit.Tok, "literal %s out of range for REAL (magnitude up to %.8g)", lit.Text, math.MaxFloat32)
 	}
 }

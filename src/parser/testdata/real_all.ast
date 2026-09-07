@@ -1,0 +1,238 @@
+Function(Half : REAL)
+  VarBlock(VAR_INPUT)
+    VarDecl(x : REAL)
+  Assign
+    Target:
+      Ident(Half)
+    Value:
+      Binary(/)
+        Ident(x)
+        Int(2)
+Function(Scale : REAL)
+  VarBlock(VAR_INPUT)
+    VarDecl(v : REAL)
+    VarDecl(k : INT)
+  Assign
+    Target:
+      Ident(Scale)
+    Value:
+      Binary(*)
+        Ident(v)
+        Call
+          Callee:
+            Ident(INT_TO_REAL)
+          Arg
+            Ident(k)
+FunctionBlock(Integrator)
+  VarBlock(VAR_INPUT)
+    VarDecl(v : REAL)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(total : REAL)
+  VarBlock(VAR)
+    VarDecl(dt : REAL)
+      Init:
+        Real(0.25)
+  Assign
+    Target:
+      Ident(total)
+    Value:
+      Binary(+)
+        Ident(total)
+        Binary(*)
+          Ident(v)
+          Ident(dt)
+Program(RealAll)
+  VarBlock(VAR)
+    VarDecl(a : REAL)
+      Init:
+        Real(2.5)
+    VarDecl(b : REAL)
+      Init:
+        Real(0.25)
+    VarDecl(neg : REAL)
+      Init:
+        Unary(-)
+          Real(1.5)
+    VarDecl(big : REAL)
+      Init:
+        Real(1.5E3)
+    VarDecl(zero : REAL)
+    VarDecl(quot : REAL)
+    VarDecl(half : REAL)
+    VarDecl(scaled : REAL)
+    VarDecl(conv : REAL)
+    VarDecl(rounded : INT)
+    VarDecl(negRounded : INT)
+    VarDecl(cmp : INT)
+    VarDecl(i : INT)
+    VarDecl(acc : REAL)
+    VarDecl(total : REAL)
+    VarDecl(integ : Integrator)
+  Assign
+    Target:
+      Ident(quot)
+    Value:
+      Binary(/)
+        Int(1)
+        Int(2)
+  Assign
+    Target:
+      Ident(half)
+    Value:
+      Call
+        Callee:
+          Ident(Half)
+        Arg
+          Binary(+)
+            Ident(a)
+            Int(1)
+  Assign
+    Target:
+      Ident(scaled)
+    Value:
+      Call
+        Callee:
+          Ident(Scale)
+        Arg
+          Ident(b)
+        Arg
+          Int(3)
+  Assign
+    Target:
+      Ident(rounded)
+    Value:
+      Call
+        Callee:
+          Ident(REAL_TO_INT)
+        Arg
+          Ident(a)
+  Assign
+    Target:
+      Ident(negRounded)
+    Value:
+      Call
+        Callee:
+          Ident(REAL_TO_INT)
+        Arg
+          Ident(neg)
+  Assign
+    Target:
+      Ident(conv)
+    Value:
+      Binary(-)
+        Call
+          Callee:
+            Ident(INT_TO_REAL)
+          Arg
+            Ident(rounded)
+        Ident(b)
+  Assign
+    Target:
+      Ident(cmp)
+    Value:
+      Int(0)
+  If
+    Cond:
+      Binary(>)
+        Ident(a)
+        Ident(b)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(1)
+  If
+    Cond:
+      Binary(=)
+        Binary(*)
+          Ident(a)
+          Ident(b)
+        Real(0.625)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(2)
+  If
+    Cond:
+      Binary(<)
+        Ident(zero)
+        Int(1)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(4)
+  If
+    Cond:
+      Binary(>=)
+        Ident(neg)
+        Int(0)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(8)
+  If
+    Cond:
+      Binary(<>)
+        Ident(b)
+        Real(0.25)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(16)
+  Assign
+    Target:
+      Ident(acc)
+    Value:
+      Int(0)
+  For(i)
+    Start:
+      Int(1)
+    End:
+      Int(4)
+    Do:
+      Assign
+        Target:
+          Ident(acc)
+        Value:
+          Binary(+)
+            Ident(acc)
+            Binary(*)
+              Call
+                Callee:
+                  Ident(INT_TO_REAL)
+                Arg
+                  Ident(i)
+              Real(0.5)
+  CallStmt
+    Call
+      Callee:
+        Ident(integ)
+      Arg(v :=)
+        Ident(a)
+  CallStmt
+    Call
+      Callee:
+        Ident(integ)
+      Arg(v :=)
+        Ident(b)
+      Arg(total =>)
+        Ident(total)
