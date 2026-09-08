@@ -67,8 +67,10 @@ void MainWindow::on_pushButtonTranslate_clicked()
     }
 
     QByteArray output = process.readAllStandardOutput();
+    QByteArray errOutput = process.readAllStandardError();
     cResult_ = QString::fromUtf8(output);
 
     ui->plainTextEditResult->setPlainText(cResult_);
+    ui->textEditErr->setPlainText(QString::fromUtf8(errOutput));
 }
 
