@@ -199,6 +199,47 @@ func TestAllTokens(t *testing.T) {
 			},
 		},
 		{
+			name:  "BOOL keyword and boolean literals",
+			input: "v : BOOL; b := TRUE; c := FALSE;",
+			want: []expTok{
+				{IDENT, "v"}, {COLON, ":"}, {BOOL, "BOOL"}, {SEMICOLON, ";"},
+				{IDENT, "b"}, {ASSIGN, ":="}, {TRUE, "TRUE"}, {SEMICOLON, ";"},
+				{IDENT, "c"}, {ASSIGN, ":="}, {FALSE, "FALSE"}, {SEMICOLON, ";"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "logical operators",
+			input: "a AND b OR NOT c XOR d",
+			want: []expTok{
+				{IDENT, "a"}, {AND, "AND"}, {IDENT, "b"}, {OR, "OR"},
+				{NOT, "NOT"}, {IDENT, "c"}, {XOR, "XOR"}, {IDENT, "d"},
+				{EOF, ""},
+			},
+		},
+		{
+			// `&` — синоним AND по IEC; отдельный токен AMP, `&&` в ST нет,
+			// поэтому вплотную к операндам он разбирается так же.
+			name:  "ampersand as AND synonym",
+			input: "x & y p&q",
+			want: []expTok{
+				{IDENT, "x"}, {AMP, "&"}, {IDENT, "y"},
+				{IDENT, "p"}, {AMP, "&"}, {IDENT, "q"},
+				{EOF, ""},
+			},
+		},
+		{
+			// Ключевое слово — идентификатор целиком, а не его префикс.
+			name:  "keyword prefixes stay identifiers",
+			input: "AND1 NOTx ORDER BOOLEAN TRUEX FALSEHOOD XORS",
+			want: []expTok{
+				{IDENT, "AND1"}, {IDENT, "NOTx"}, {IDENT, "ORDER"},
+				{IDENT, "BOOLEAN"}, {IDENT, "TRUEX"}, {IDENT, "FALSEHOOD"},
+				{IDENT, "XORS"},
+				{EOF, ""},
+			},
+		},
+		{
 			name:  "assignment statement",
 			input: "sum := sum + x;",
 			want: []expTok{
@@ -306,6 +347,11 @@ func TestKeywordsCaseInsensitive(t *testing.T) {
 		{IDENT, "Sum"},
 		{EOF, ""},
 	})
+	assertTokens(t, "bool and Not TrUe xor faLSe or", []expTok{
+		{BOOL, "BOOL"}, {AND, "AND"}, {NOT, "NOT"}, {TRUE, "TRUE"},
+		{XOR, "XOR"}, {FALSE, "FALSE"}, {OR, "OR"},
+		{EOF, ""},
+	})
 }
 
 // TestLineNumbers: номер строки растёт на \n (LF и CRLF).
@@ -355,7 +401,7 @@ func TestUnterminatedBlockComment(t *testing.T) {
 // на каждом переводе строки. Вещественный литерал — один токен, колонка
 // следующего за ним учитывает всю его длину.
 func TestColumns(t *testing.T) {
-	input := "x := 10;\n  sum := sum + 1;\nr := 1.5e2;"
+	input := "x := 10;\n  sum := sum + 1;\nr := 1.5e2;\nb := c & d;"
 	want := []struct {
 		lit  string
 		line int
@@ -364,6 +410,7 @@ func TestColumns(t *testing.T) {
 		{"x", 1, 1}, {":=", 1, 3}, {"10", 1, 6}, {";", 1, 8},
 		{"sum", 2, 3}, {":=", 2, 7}, {"sum", 2, 10}, {"+", 2, 14}, {"1", 2, 16}, {";", 2, 17},
 		{"r", 3, 1}, {":=", 3, 3}, {"1.5e2", 3, 6}, {";", 3, 11},
+		{"b", 4, 1}, {":=", 4, 3}, {"c", 4, 6}, {"&", 4, 8}, {"d", 4, 10}, {";", 4, 11},
 	}
 	toks := collect(t, input)
 	if len(toks) != len(want)+1 { // +1 за EOF

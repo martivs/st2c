@@ -58,17 +58,24 @@ const (
 	GE            // >=
 	EQ            // =
 	NE            // <>
+	AND           // AND (и синоним &)
+	OR            // OR
+	XOR           // XOR
 	NEG           // унарный минус
+	NOT           // NOT
 )
 
 var opNames = map[Op]string{
 	ADD: "+", SUB: "-", MUL: "*", DIV: "/",
 	LT: "<", LE: "<=", GT: ">", GE: ">=", EQ: "=", NE: "<>",
-	NEG: "-",
+	AND: "AND", OR: "OR", XOR: "XOR",
+	NEG: "-", NOT: "NOT",
 }
 
-// String возвращает исходный символ операции (`+`, `<=`, …) — те же метки,
-// что печатал лексерный TokenType, поэтому golden-эталоны текстово стабильны.
+// String возвращает исходное написание операции: символ (`+`, `<=`, …) либо
+// слово (`AND`, `NOT`) — те же метки, что печатал лексерный TokenType, поэтому
+// golden-эталоны текстово стабильны. Синоним `&` отображён в AND и отдельного
+// написания не имеет (обратная печать исходника — задача форматтера).
 func (o Op) String() string {
 	if s, ok := opNames[o]; ok {
 		return s
@@ -400,6 +407,23 @@ type RealLiteral struct {
 func (e *RealLiteral) expressionNode() {}
 func (e *RealLiteral) Line() int       { return e.Tok.Line }
 func (e *RealLiteral) String() string  { return fmt.Sprintf("Real(%s)", e.Text) }
+
+// BoolLiteral — булев литерал TRUE/FALSE. String() печатает значение всегда в
+// верхнем регистре, независимо от написания в исходнике: golden-эталоны .ast
+// не должны зависеть от того, написал автор `TRUE` или `true`.
+type BoolLiteral struct {
+	Value bool
+	Tok   lexer.Token
+}
+
+func (e *BoolLiteral) expressionNode() {}
+func (e *BoolLiteral) Line() int       { return e.Tok.Line }
+func (e *BoolLiteral) String() string {
+	if e.Value {
+		return "Bool(TRUE)"
+	}
+	return "Bool(FALSE)"
+}
 
 // BinaryExpr — бинарная операция: и арифметика (+ - * /), и сравнения
 // (> < = <= >= <>). Различаются полем Op. Приоритет операций задаётся не

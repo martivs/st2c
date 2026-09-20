@@ -33,6 +33,7 @@ const (
 	RPAREN    // )
 	DOT       // .  (доступ к члену: inst.Out)
 	ARROW     // => (привязка выхода: out => y)
+	AMP       // &  (синоним AND по IEC)
 
 	PROGRAM
 	END_PROGRAM
@@ -46,6 +47,7 @@ const (
 	RETAIN
 	INT
 	REAL
+	BOOL
 	IF
 	THEN
 	ELSE
@@ -59,6 +61,12 @@ const (
 	END_FUNCTION
 	FUNCTION_BLOCK
 	END_FUNCTION_BLOCK
+	TRUE
+	FALSE
+	AND
+	OR
+	XOR
+	NOT
 )
 
 // tokenNames — имена типов токенов для печати. Ключевые слова сюда не
@@ -72,7 +80,7 @@ var tokenNames = map[TokenType]string{
 	GT: ">", LT: "<", EQ: "=", LE: "<=", GE: ">=", NE: "<>",
 	COLON: ":", SEMICOLON: ";", COMMA: ",",
 	LPAREN: "(", RPAREN: ")",
-	DOT: ".", ARROW: "=>",
+	DOT: ".", ARROW: "=>", AMP: "&",
 }
 
 func init() {
@@ -92,7 +100,10 @@ var keywords = map[string]TokenType{
 	"PROGRAM": PROGRAM, "END_PROGRAM": END_PROGRAM,
 	"VAR": VAR, "VAR_INPUT": VAR_INPUT, "VAR_OUTPUT": VAR_OUTPUT,
 	"VAR_IN_OUT": VAR_IN_OUT, "VAR_TEMP": VAR_TEMP, "END_VAR": END_VAR,
-	"CONSTANT": CONSTANT, "RETAIN": RETAIN, "INT": INT, "REAL": REAL,
+	"CONSTANT": CONSTANT, "RETAIN": RETAIN,
+	"INT": INT, "REAL": REAL, "BOOL": BOOL,
+	"TRUE": TRUE, "FALSE": FALSE,
+	"AND": AND, "OR": OR, "XOR": XOR, "NOT": NOT,
 	"IF": IF, "THEN": THEN, "ELSE": ELSE, "END_IF": END_IF,
 	"FOR": FOR, "TO": TO, "BY": BY, "DO": DO, "END_FOR": END_FOR,
 	"FUNCTION": FUNCTION, "END_FUNCTION": END_FUNCTION,
@@ -176,6 +187,9 @@ func (l *Lexer) NextToken() Token {
 	case ch == '/':
 		l.pos++
 		return Token{Type: SLASH, Literal: "/", Line: line, Col: col}
+	case ch == '&':
+		l.pos++
+		return Token{Type: AMP, Literal: "&", Line: line, Col: col}
 	case ch == '>' && l.peek() == '=':
 		l.pos += 2
 		return Token{Type: GE, Literal: ">=", Line: line, Col: col}
