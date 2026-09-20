@@ -178,6 +178,155 @@ func TestExpressionStructure(t *testing.T) {
     Ident(r)
     Real(1e-3)`,
 		},
+		{
+			// Этап 2 BOOL: логические уровни по IEC — OR < XOR < AND, все
+			// ниже сравнений; NOT — унарный уровень, сильнее любого бинарного.
+			name: "AND сильнее OR (справа)",
+			expr: "a OR b AND c",
+			want: `Binary(OR)
+  Ident(a)
+  Binary(AND)
+    Ident(b)
+    Ident(c)`,
+		},
+		{
+			name: "AND сильнее OR (слева)",
+			expr: "a AND b OR c",
+			want: `Binary(OR)
+  Binary(AND)
+    Ident(a)
+    Ident(b)
+  Ident(c)`,
+		},
+		{
+			name: "три логических уровня OR < XOR < AND",
+			expr: "a OR b XOR c AND d",
+			want: `Binary(OR)
+  Ident(a)
+  Binary(XOR)
+    Ident(b)
+    Binary(AND)
+      Ident(c)
+      Ident(d)`,
+		},
+		{
+			name: "NOT сильнее AND",
+			expr: "NOT a AND b",
+			want: `Binary(AND)
+  Unary(NOT)
+    Ident(a)
+  Ident(b)`,
+		},
+		{
+			name: "скобки под NOT",
+			expr: "NOT (a AND b)",
+			want: `Unary(NOT)
+  Binary(AND)
+    Ident(a)
+    Ident(b)`,
+		},
+		{
+			name: "отношения сильнее AND",
+			expr: "x > 1 AND y < 2",
+			want: `Binary(AND)
+  Binary(>)
+    Ident(x)
+    Int(1)
+  Binary(<)
+    Ident(y)
+    Int(2)`,
+		},
+		{
+			name: "равенство сильнее AND, но слабее отношений",
+			expr: "a = b < c AND d",
+			want: `Binary(AND)
+  Binary(=)
+    Ident(a)
+    Binary(<)
+      Ident(b)
+      Ident(c)
+  Ident(d)`,
+		},
+		{
+			name: "левая ассоциативность OR",
+			expr: "a OR b OR c",
+			want: `Binary(OR)
+  Binary(OR)
+    Ident(a)
+    Ident(b)
+  Ident(c)`,
+		},
+		{
+			name: "AND словом",
+			expr: "a AND b",
+			want: `Binary(AND)
+  Ident(a)
+  Ident(b)`,
+		},
+		{
+			// Решение 4 BOOL: `&` неотличим от AND — ровно то же дерево.
+			name: "& — синоним AND с тем же деревом",
+			expr: "a & b",
+			want: `Binary(AND)
+  Ident(a)
+  Ident(b)`,
+		},
+		{
+			name: "& на уровне AND: сильнее OR",
+			expr: "a & b OR c & d",
+			want: `Binary(OR)
+  Binary(AND)
+    Ident(a)
+    Ident(b)
+  Binary(AND)
+    Ident(c)
+    Ident(d)`,
+		},
+		{
+			name: "булев литерал в сравнении",
+			expr: "b = TRUE",
+			want: `Binary(=)
+  Ident(b)
+  Bool(TRUE)`,
+		},
+		{
+			name: "двойной NOT",
+			expr: "NOT NOT b",
+			want: `Unary(NOT)
+  Unary(NOT)
+    Ident(b)`,
+		},
+		{
+			// По IEC NOT сильнее `=`: `NOT a = b` — это `(NOT a) = b`.
+			name: "NOT сильнее равенства",
+			expr: "NOT a = b",
+			want: `Binary(=)
+  Unary(NOT)
+    Ident(a)
+  Ident(b)`,
+		},
+		{
+			// Синтаксически допустимо, типы отвергнет sema (этап 3).
+			name: "NOT над унарным минусом",
+			expr: "NOT -x",
+			want: `Unary(NOT)
+  Unary(-)
+    Ident(x)`,
+		},
+		{
+			name: "NOT слабее вызова и члена",
+			expr: "NOT inst.Out AND NOT F(1)",
+			want: `Binary(AND)
+  Unary(NOT)
+    Member(Out)
+      Ident(inst)
+  Unary(NOT)
+    Call
+      Callee:
+        Ident(F)
+      Arg
+        Int(1)`,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -428,6 +577,20 @@ func TestVarBlocks(t *testing.T) {
       Real(2.5)
   VarDecl(a, b : REAL)`},
 		},
+		{
+			// Этап 2 BOOL: тип и литералы регистронезависимы, в дереве —
+			// канонический верхний регистр.
+			name: "тип BOOL с булевыми инициализаторами",
+			vars: "VAR f : BOOL := TRUE; g : bool := false; a, b : BOOL; END_VAR",
+			want: []string{`VarBlock(VAR)
+  VarDecl(f : BOOL)
+    Init:
+      Bool(TRUE)
+  VarDecl(g : BOOL)
+    Init:
+      Bool(FALSE)
+  VarDecl(a, b : BOOL)`},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -482,6 +645,62 @@ func TestRealLiteral(t *testing.T) {
 		}
 		if got := fn.VarBlocks[0].Decls[0].TypeName; got != "REAL" {
 			t.Errorf("тип входа: got %q, want %q", got, "REAL")
+		}
+	})
+}
+
+// TestBoolLiteral: этап 2 BOOL — TRUE/FALSE разбираются в BoolLiteral с
+// позицией (регистр не важен); BOOL принимается как тип входа и тип возврата
+// FUNCTION; условие IF — любое выражение, в том числе логическое.
+func TestBoolLiteral(t *testing.T) {
+	t.Run("значение и позиция литерала", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nb := TRUE;\nc := false;\nEND_PROGRAM")
+		for i, want := range []bool{true, false} {
+			assign := prog.Body[i].(*ast.AssignStatement)
+			lit, ok := assign.Value.(*ast.BoolLiteral)
+			if !ok {
+				t.Fatalf("оператор %d: ожидался *ast.BoolLiteral, получен %T", i, assign.Value)
+			}
+			if lit.Value != want {
+				t.Errorf("оператор %d: Value: got %v, want %v", i, lit.Value, want)
+			}
+			if lit.Line() != i+2 {
+				t.Errorf("оператор %d: Line: got %d, want %d", i, lit.Line(), i+2)
+			}
+		}
+	})
+	t.Run("BOOL как тип возврата и входа функции", func(t *testing.T) {
+		src := "FUNCTION IsHot : BOOL\nVAR_INPUT t : INT; en : bool; END_VAR\nIsHot := en AND t > 100;\nEND_FUNCTION"
+		p := parser.New(lexer.New(src))
+		sf, err := p.ParseSourceFile()
+		if err != nil {
+			t.Fatalf("parse error: %v", err)
+		}
+		fn, ok := sf.POUs[0].(*ast.Function)
+		if !ok {
+			t.Fatalf("ожидался *ast.Function, получен %T", sf.POUs[0])
+		}
+		if fn.ReturnType != "BOOL" {
+			t.Errorf("ReturnType: got %q, want %q", fn.ReturnType, "BOOL")
+		}
+		if got := fn.VarBlocks[0].Decls[1].TypeName; got != "BOOL" {
+			t.Errorf("тип входа: got %q, want %q", got, "BOOL")
+		}
+	})
+	t.Run("логическое условие IF", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nIF NOT done OR x > 1 THEN x := 0; END_IF\nEND_PROGRAM")
+		ifStmt, ok := prog.Body[0].(*ast.IfStatement)
+		if !ok {
+			t.Fatalf("ожидался *ast.IfStatement, получен %T", prog.Body[0])
+		}
+		want := `Binary(OR)
+  Unary(NOT)
+    Ident(done)
+  Binary(>)
+    Ident(x)
+    Int(1)`
+		if got := strings.TrimRight(ifStmt.Condition.String(), "\n"); got != want {
+			t.Errorf("условие IF:\n--- got ---\n%s\n--- want ---\n%s", got, want)
 		}
 	})
 }
@@ -631,6 +850,39 @@ func TestParseErrors(t *testing.T) {
 			name:       "вещественный литерал в начале оператора",
 			input:      "PROGRAM P\n3.14;\nEND_PROGRAM",
 			wantSubstr: `line 2: unexpected token REAL_LIT "3.14" at statement start`,
+		},
+		{
+			// Этап 2 BOOL: бинарный логический оператор без левого операнда.
+			name:       "AND без левого операнда",
+			input:      "PROGRAM P\nx := AND b;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got AND "AND"`,
+		},
+		{
+			// `&` вписан в tokenNames руками — сообщение обязано печатать `&`,
+			// а не UNKNOWN.
+			name:       "& без левого операнда",
+			input:      "PROGRAM P\nx := & b;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got & "&"`,
+		},
+		{
+			name:       "NOT без операнда",
+			input:      "PROGRAM P\nx := NOT;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got ; ";"`,
+		},
+		{
+			name:       "AND без правого операнда",
+			input:      "PROGRAM P\nx := a AND;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got ; ";"`,
+		},
+		{
+			name:       "булев литерал в начале оператора",
+			input:      "PROGRAM P\nTRUE := x;\nEND_PROGRAM",
+			wantSubstr: `line 2: unexpected token TRUE "TRUE" at statement start`,
+		},
+		{
+			name:       "логический оператор вместо := после цели присваивания",
+			input:      "PROGRAM P\na AND b;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected :=, got AND "AND"`,
 		},
 	}
 	for _, tc := range tests {

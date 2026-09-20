@@ -209,12 +209,12 @@ func (p *Parser) parseVarDecl() *ast.VarDecl {
 	return decl
 }
 
-// parseType — имя типа: ключевое слово встроенного типа (INT, REAL) или любой
-// идентификатор (пользовательский тип). Допустимость имени — задача sema, не
-// парсера.
+// parseType — имя типа: ключевое слово встроенного типа (INT, REAL, BOOL)
+// или любой идентификатор (пользовательский тип). Допустимость имени — задача
+// sema, не парсера.
 func (p *Parser) parseType() string {
 	switch p.cur.Type {
-	case lexer.INT, lexer.REAL, lexer.IDENT:
+	case lexer.INT, lexer.REAL, lexer.BOOL, lexer.IDENT:
 		tok := p.cur
 		p.nextToken()
 		return tok.Literal
@@ -353,30 +353,48 @@ func (p *Parser) optionalSemicolon() {
 // Выражения: Pratt / precedence climbing
 //
 // Одна функция parseExpression(minPrec) + таблица приоритетов prec. Уровни —
-// по IEC 61131-3: сравнение (= <>) слабее отношений (< > <= >=), дальше
-// аддитивные, мультипликативные, унарные, атомы. Новый бинарный оператор =
-// по одной строке в prec и binOps.
+// по IEC 61131-3, от слабого к сильному: OR, XOR, AND (и синоним &),
+// сравнение (= <>), отношения (< > <= >=), аддитивные, мультипликативные,
+// унарные (-, NOT), атомы с постфиксами. Новый бинарный оператор = по одной
+// строке в prec и binOps, унарный — строка в unaryOps.
 // ---------------------------------------------------------------------------
 
 // prec — приоритеты бинарных операторов: больше — связывает сильнее.
+// Логические уровни (1–3) ниже всех остальных: `x > 1 AND y < 2` — AND над
+// двумя сравнениями, `a OR b AND c` — OR над AND. Относительный порядок
+// прежних уровней (сравнение < отношения < аддитивные < мультипликативные)
+// сохранён, поэтому разбор старых программ не изменился (golden .ast).
 var prec = map[lexer.TokenType]int{
-	lexer.EQ: 1, lexer.NE: 1,
-	lexer.LT: 2, lexer.GT: 2, lexer.LE: 2, lexer.GE: 2,
-	lexer.PLUS: 3, lexer.MINUS: 3,
-	lexer.STAR: 4, lexer.SLASH: 4,
+	lexer.OR:  1,
+	lexer.XOR: 2,
+	lexer.AND: 3, lexer.AMP: 3,
+	lexer.EQ: 4, lexer.NE: 4,
+	lexer.LT: 5, lexer.GT: 5, lexer.LE: 5, lexer.GE: 5,
+	lexer.PLUS: 6, lexer.MINUS: 6,
+	lexer.STAR: 7, lexer.SLASH: 7,
 }
 
 // lowestPrec — минимальный приоритет: parseExpression(lowestPrec) разбирает
 // выражение целиком.
 const lowestPrec = 1
 
-// binOps — перевод токена-оператора в операцию AST.
+// binOps — перевод токена-оператора в операцию AST. `&` и `AND` дают одну
+// и ту же ast.AND: в дереве синоним неотличим от слова (решение 4 работы по
+// BOOL), обратная печать исходника — задача будущего форматтера.
 var binOps = map[lexer.TokenType]ast.Op{
 	lexer.PLUS: ast.ADD, lexer.MINUS: ast.SUB,
 	lexer.STAR: ast.MUL, lexer.SLASH: ast.DIV,
 	lexer.LT: ast.LT, lexer.LE: ast.LE,
 	lexer.GT: ast.GT, lexer.GE: ast.GE,
 	lexer.EQ: ast.EQ, lexer.NE: ast.NE,
+	lexer.AND: ast.AND, lexer.AMP: ast.AND,
+	lexer.OR: ast.OR, lexer.XOR: ast.XOR,
+}
+
+// unaryOps — перевод токена унарного оператора в операцию AST.
+var unaryOps = map[lexer.TokenType]ast.Op{
+	lexer.MINUS: ast.NEG,
+	lexer.NOT:   ast.NOT,
 }
 
 // parseExpression разбирает выражение, состоящее из операторов с приоритетом
@@ -397,21 +415,23 @@ func (p *Parser) parseExpression(minPrec int) ast.Expression {
 	return left
 }
 
-// parseUnary — унарный минус (рекурсивно: --x допустим); сюда же позже лягут
-// унарный `+` и NOT.
+// parseUnary — унарные минус и NOT, оба рекурсивно: `--x`, `NOT NOT b`,
+// `NOT -x` разбираются (допустимость типов — за sema). Унарный уровень сильнее
+// любого бинарного: `NOT a = b` — это `(NOT a) = b`, как и по IEC. Унарный `+`
+// пока не поддерживается.
 func (p *Parser) parseUnary() ast.Expression {
 	if p.err != nil {
 		return nil
 	}
-	if p.curIs(lexer.MINUS) {
+	if op, ok := unaryOps[p.cur.Type]; ok {
 		tok := p.cur
 		p.nextToken()
-		return &ast.UnaryExpr{Op: ast.NEG, Operand: p.parseUnary(), Tok: tok}
+		return &ast.UnaryExpr{Op: op, Operand: p.parseUnary(), Tok: tok}
 	}
 	return p.parsePrimary()
 }
 
-// parsePrimary — атом (идентификатор, целый или вещественный литерал,
+// parsePrimary — атом (идентификатор, целый, вещественный или булев литерал,
 // ( expression )) плюс
 // постфиксы: пока текущий токен `.` или `(`, атом наращивается в MemberExpr
 // (`inst.Out`) или CallExpr (`Add(1, 2)`). `(` после primary — постфиксный
@@ -445,6 +465,10 @@ func (p *Parser) parsePrimary() ast.Expression {
 			return nil
 		}
 		expr = &ast.RealLiteral{Value: val, Text: tok.Literal, Tok: tok}
+	case lexer.TRUE, lexer.FALSE:
+		tok := p.cur
+		p.nextToken()
+		expr = &ast.BoolLiteral{Value: tok.Type == lexer.TRUE, Tok: tok}
 	case lexer.LPAREN:
 		p.nextToken()
 		expr = p.parseExpression(lowestPrec)

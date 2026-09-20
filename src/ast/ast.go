@@ -445,8 +445,8 @@ func (e *BinaryExpr) String() string {
 	return b.String()
 }
 
-// UnaryExpr — унарная операция: `-x`. Сейчас Op всегда NEG; унарный `+` и
-// NOT лягут в этот же узел.
+// UnaryExpr — унарная операция: `-x` (NEG) и `NOT b` (NOT). Унарный `+`
+// ляжет в этот же узел.
 type UnaryExpr struct {
 	Op      Op
 	Operand Expression
