@@ -499,9 +499,9 @@ END_FUNCTION_BLOCK`,
 }
 
 // TestTypes — этап 2 плана REAL: слой типов. Вывод типов снизу вверх,
-// запрет неявного смешения INT и REAL, адаптивный целый литерал, BOOL
-// только в условии IF, FOR только по INT, встроенные конверсии, резолв
-// типа возврата функции, типы аргументов функций и входов/выходов ФБ.
+// запрет неявного смешения INT и REAL, адаптивный целый литерал, условие
+// IF — только BOOL, FOR только по INT, встроенные конверсии, резолв типа
+// возврата функции, типы аргументов функций и входов/выходов ФБ.
 func TestTypes(t *testing.T) {
 	// Функция с REAL-параметром и REAL-возвратом; занимает строки 1–4.
 	const halfSrc = `FUNCTION Half : REAL
@@ -591,25 +591,27 @@ IF 1 THEN i := 1; END_IF
 IF i + 1 THEN i := 1; END_IF
 END_PROGRAM`,
 			want: []string{
-				`line 3:4: IF condition must be BOOL (a comparison), got REAL`,
-				`line 4:4: IF condition must be BOOL (a comparison), got INT`,
-				`line 5:4: IF condition must be BOOL (a comparison), got INT`,
+				`line 3:4: IF condition must be BOOL, got REAL`,
+				`line 4:4: IF condition must be BOOL, got INT`,
+				`line 5:4: IF condition must be BOOL, got INT`,
 			},
 		},
 		{
-			name: "BOOL в арифметике, присваивании, унарном минусе и сравнении",
+			// Порядковое сравнение BOOL — ошибка; равенство `(i > 1) = (i < 3)`
+			// с этапа 3 плана BOOL законно (решение 6) и здесь не проверяется.
+			name: "BOOL в арифметике, присваивании, унарном минусе и порядковом сравнении",
 			src: `PROGRAM P
 VAR i : INT; r : REAL; END_VAR
 i := (i > 1) + 1;
 i := i > 1;
 r := -(r > 1.0);
-IF (i > 1) = (i < 3) THEN i := 0; END_IF
+IF (i > 1) < (i < 3) THEN i := 0; END_IF
 END_PROGRAM`,
 			want: []string{
 				`line 3:14: operator "+" is not applicable to BOOL`,
 				`line 4:1: cannot assign BOOL to "i" of type INT`,
 				`line 5:6: unary minus is not applicable to BOOL`,
-				`line 6:12: cannot compare BOOL values`,
+				`line 6:12: cannot order BOOL values`,
 			},
 		},
 		{
@@ -845,9 +847,9 @@ IF Half(r) THEN r := 1.0; END_IF
 IF 2.5 THEN r := 1.0; END_IF
 END_PROGRAM`,
 			want: []string{
-				`line 12:4: IF condition must be BOOL (a comparison), got REAL`,
-				`line 13:4: IF condition must be BOOL (a comparison), got REAL`,
-				`line 14:4: IF condition must be BOOL (a comparison), got REAL`,
+				`line 12:4: IF condition must be BOOL, got REAL`,
+				`line 13:4: IF condition must be BOOL, got REAL`,
+				`line 14:4: IF condition must be BOOL, got REAL`,
 			},
 		},
 		{
@@ -957,16 +959,353 @@ END_PROGRAM`,
 	}
 }
 
+// TestBool — этап 3 плана BOOL: BOOL как объявляемый тип, литералы
+// TRUE/FALSE, логические операции AND/OR/XOR (и синоним `&`), унарный NOT,
+// сравнение BOOL только через = и <> (порядковые — ошибка), условие IF —
+// любое выражение BOOL, BOOL во входах/выходах ФБ и во входах/возврате
+// функций. Адаптивного булева литерала нет: `b := 1;` и `i := TRUE;` —
+// ошибки; конверсий BOOL ↔ INT нет, поэтому ни одна ошибка с BOOL не
+// подсказывает INT_TO_REAL / REAL_TO_INT.
+func TestBool(t *testing.T) {
+	// Функция с BOOL-входом и BOOL-возвратом (строки 1–4) и ФБ с BOOL-входами
+	// (один с инициализатором) и BOOL-выходом (строки 5–10); программа за
+	// ними начинается со строки 11.
+	const pous = `FUNCTION IsHot : BOOL
+VAR_INPUT en : BOOL; t : INT; END_VAR
+IsHot := en AND t > 30;
+END_FUNCTION
+FUNCTION_BLOCK Latch
+VAR_INPUT Set : BOOL; Reset : BOOL := FALSE; END_VAR
+VAR_OUTPUT Q : BOOL; END_VAR
+IF Set THEN Q := TRUE; END_IF
+IF Reset THEN Q := FALSE; END_IF
+END_FUNCTION_BLOCK
+`
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			// Позитив: инициализаторы TRUE и NOT, все четыре операции и `&`,
+			// NOT NOT, равенство и неравенство BOOL (в том числе литералов и
+			// `(NOT b) = FALSE`), IF по переменной, по NOT, по литералу, по
+			// логической связке сравнений, по вызову и по члену; BOOL в
+			// аргументах и возврате функции, во входах/выходе ФБ (`:=`, `=>`,
+			// член); флаг, накапливаемый в целочисленном FOR.
+			name: "корректная программа с BOOL во всех контекстах",
+			src: pous + `PROGRAM P
+VAR b : BOOL := TRUE; c : BOOL := NOT b; b1, b2 : BOOL; x : INT := 5; flag : BOOL; l : Latch; END_VAR
+b := x > 1;
+b := b1 AND NOT b2;
+b := b1 & b2;
+b := b1 OR b2 XOR c;
+b := NOT NOT b1;
+b := b1 = b2;
+b := b1 <> (x > 1);
+b := TRUE = FALSE;
+b := NOT b = FALSE;
+b := (x > 1) AND (x < 10) OR NOT c;
+IF b THEN x := 1; END_IF
+IF NOT b OR (x > 1) THEN x := 2; END_IF
+IF b1 = b2 THEN x := 3; END_IF
+IF x > 1 AND x < 10 THEN x := 4; END_IF
+IF FALSE THEN x := 0; END_IF
+IF IsHot(b, x) THEN x := 0; END_IF
+b := IsHot(en := TRUE, t := x + 1) = TRUE;
+l(Set := TRUE, Q => flag);
+l(Set := b1 AND b2, Reset := NOT b);
+l.Set := b;
+flag := l.Q;
+IF l.Q THEN x := 5; END_IF
+b := l.Q AND flag;
+FOR x := 1 TO 10 DO
+    IF x = 3 THEN flag := TRUE; END_IF
+END_FOR
+END_PROGRAM`,
+		},
+		{
+			// Решение 5 плана BOOL: целый и вещественный литералы не
+			// адаптируются к BOOL ни в инициализаторе, ни в присваивании.
+			name: "адаптивного булева литерала нет: число в BOOL",
+			src: `PROGRAM P
+VAR b : BOOL := 1; END_VAR
+b := 0;
+b := 1.0;
+END_PROGRAM`,
+			want: []string{
+				`line 2:5: cannot assign INT to "b" of type BOOL`,
+				`line 3:1: cannot assign INT to "b" of type BOOL`,
+				`line 4:1: cannot assign REAL to "b" of type BOOL`,
+			},
+		},
+		{
+			name: "булев литерал в INT и REAL",
+			src: `PROGRAM P
+VAR i : INT := TRUE; r : REAL; END_VAR
+i := FALSE;
+r := TRUE;
+END_PROGRAM`,
+			want: []string{
+				`line 2:5: cannot assign BOOL to "i" of type INT`,
+				`line 3:1: cannot assign BOOL to "i" of type INT`,
+				`line 4:1: cannot assign BOOL to "r" of type REAL`,
+			},
+		},
+		{
+			name: "BOOL-переменная и число в обе стороны",
+			src: `PROGRAM P
+VAR i : INT; r : REAL; b : BOOL; END_VAR
+i := b;
+b := i;
+r := b;
+b := r;
+END_PROGRAM`,
+			want: []string{
+				`line 3:1: cannot assign BOOL to "i" of type INT`,
+				`line 4:1: cannot assign INT to "b" of type BOOL`,
+				`line 5:1: cannot assign BOOL to "r" of type REAL`,
+				`line 6:1: cannot assign REAL to "b" of type BOOL`,
+			},
+		},
+		{
+			// Ошибка одна на строку: результат — Invalid, присваивание молчит.
+			name: "BOOL в арифметике и под унарным минусом",
+			src: `PROGRAM P
+VAR i : INT; r : REAL; b : BOOL; END_VAR
+b := TRUE + 1;
+i := i + b;
+r := r * (i > 1);
+i := -b;
+END_PROGRAM`,
+			want: []string{
+				`line 3:11: operator "+" is not applicable to BOOL`,
+				`line 4:8: operator "+" is not applicable to BOOL`,
+				`line 5:8: operator "*" is not applicable to BOOL`,
+				`line 6:6: unary minus is not applicable to BOOL`,
+			},
+		},
+		{
+			// Логическая операция определена только над BOOL; `&` — синоним
+			// AND и в сообщении зовётся AND (решение 4: в дереве неотличим).
+			// В условии IF после ошибки операции каскада «must be BOOL» нет.
+			name: "логические операции над INT и REAL",
+			src: `PROGRAM P
+VAR i : INT; j : INT; r : REAL; b : BOOL; END_VAR
+IF i AND j THEN i := 1; END_IF
+b := i OR b;
+b := b XOR r;
+b := i & j;
+b := b AND 1;
+b := 1 OR 2;
+END_PROGRAM`,
+			want: []string{
+				`line 3:6: operator "AND" requires BOOL operands, got INT and INT`,
+				`line 4:8: operator "OR" requires BOOL operands, got INT and BOOL`,
+				`line 5:8: operator "XOR" requires BOOL operands, got BOOL and REAL`,
+				`line 6:8: operator "AND" requires BOOL operands, got INT and INT`,
+				`line 7:8: operator "AND" requires BOOL operands, got BOOL and INT`,
+				`line 8:8: operator "OR" requires BOOL operands, got INT and INT`,
+			},
+		},
+		{
+			name: "NOT над INT, литералом, REAL, минусом и арифметикой",
+			src: `PROGRAM P
+VAR i : INT; r : REAL; b : BOOL; END_VAR
+i := NOT i;
+b := NOT 1;
+b := NOT r;
+b := NOT -i;
+b := NOT (i + 1);
+END_PROGRAM`,
+			want: []string{
+				`line 3:6: NOT requires a BOOL operand, got INT`,
+				`line 4:6: NOT requires a BOOL operand, got INT`,
+				`line 5:6: NOT requires a BOOL operand, got REAL`,
+				`line 6:6: NOT requires a BOOL operand, got INT`,
+				`line 7:6: NOT requires a BOOL operand, got INT`,
+			},
+		},
+		{
+			// NOT — унарный уровень, сильнее сравнения: `NOT x > 1` это
+			// `(NOT x) > 1`, и ошибка — на NOT; `NOT (x > 1)` законно.
+			name: "приоритет NOT против сравнения",
+			src: `PROGRAM P
+VAR x : INT; b : BOOL; END_VAR
+b := NOT x > 1;
+b := NOT (x > 1);
+END_PROGRAM`,
+			want: []string{`line 3:6: NOT requires a BOOL operand, got INT`},
+		},
+		{
+			// Решение 6 плана BOOL: порядковые сравнения над BOOL — ошибка
+			// (в том числе с литералами и с одним BOOL-операндом).
+			name: "порядковые сравнения над BOOL",
+			src: `PROGRAM P
+VAR b1 : BOOL; b2 : BOOL; x : INT; b : BOOL; END_VAR
+IF b1 < b2 THEN x := 1; END_IF
+b := b1 <= b2;
+b := TRUE > FALSE;
+b := b1 >= (x > 1);
+b := 1 < b1;
+END_PROGRAM`,
+			want: []string{
+				`line 3:7: cannot order BOOL values (operands of "<" are BOOL and BOOL; BOOL is compared only with = and <>)`,
+				`line 4:9: cannot order BOOL values`,
+				`line 5:11: cannot order BOOL values`,
+				`line 6:9: cannot order BOOL values`,
+				`line 7:8: cannot order BOOL values (operands of "<" are INT and BOOL`,
+			},
+		},
+		{
+			// Известная ловушка: `a < b < c` — это `(a < b) < c`, левый операнд
+			// BOOL. Запрет порядковых сравнений над BOOL сохраняет диагностику;
+			// правильная запись — `a < b AND b < c`.
+			name: "ловушка a < b < c остаётся ошибкой",
+			src: `PROGRAM P
+VAR a : INT; b : INT; c : INT; END_VAR
+IF a < b < c THEN a := 0; END_IF
+IF a < b AND b < c THEN a := 1; END_IF
+END_PROGRAM`,
+			want: []string{`line 3:10: cannot order BOOL values (operands of "<" are BOOL and INT`},
+		},
+		{
+			// Равенство BOOL законно только с BOOL: правило «операнды одного
+			// типа» общее, подсказки про конверсии нет.
+			name: "равенство BOOL с числом",
+			src: `PROGRAM P
+VAR b : BOOL; i : INT; r : REAL; END_VAR
+b := b = 1;
+b := i <> TRUE;
+IF r = b THEN i := 0; END_IF
+END_PROGRAM`,
+			want: []string{
+				`line 3:8: operands of "=" have different types: BOOL and INT`,
+				`line 4:8: operands of "<>" have different types: INT and BOOL`,
+				`line 5:6: operands of "=" have different types: REAL and BOOL`,
+			},
+		},
+		{
+			// Условие — только BOOL, литерал 1 к BOOL не адаптируется;
+			// экземпляр ФБ — не значение, каскада «must be BOOL» нет.
+			name: "условие IF не BOOL: переменные, литерал, экземпляр",
+			src: pous + `PROGRAM P
+VAR i : INT; r : REAL; l : Latch; END_VAR
+IF i THEN i := 1; END_IF
+IF r THEN i := 1; END_IF
+IF 1 THEN i := 1; END_IF
+IF l THEN i := 1; END_IF
+END_PROGRAM`,
+			want: []string{
+				`line 13:4: IF condition must be BOOL, got INT`,
+				`line 14:4: IF condition must be BOOL, got REAL`,
+				`line 15:4: IF condition must be BOOL, got INT`,
+				`line 16:4: function block instance "l" cannot be used as a value`,
+			},
+		},
+		{
+			name: "FOR по BOOL: переменная, границы, шаг",
+			src: `PROGRAM P
+VAR b : BOOL; i : INT; END_VAR
+FOR b := TRUE TO FALSE DO i := 1; END_FOR
+FOR i := 1 TO 3 BY b DO i := 1; END_FOR
+END_PROGRAM`,
+			want: []string{
+				`line 3:5: FOR variable "b" must be INT, got BOOL`,
+				`line 3:10: FOR start must be INT, got BOOL`,
+				`line 3:18: FOR end must be INT, got BOOL`,
+				`line 4:20: FOR step must be INT, got BOOL`,
+			},
+		},
+		{
+			name: "функция с BOOL: INT в BOOL-вход, BOOL-результат в INT, BOOL в INT-вход",
+			src: pous + `PROGRAM P
+VAR b : BOOL; i : INT; END_VAR
+b := IsHot(i, 1);
+b := IsHot(en := 1, t := i);
+i := IsHot(b, i);
+b := IsHot(b, TRUE);
+END_PROGRAM`,
+			want: []string{
+				`line 13:11: argument for input "en" of function "IsHot" must be BOOL, got INT`,
+				`line 14:11: argument for input "en" of function "IsHot" must be BOOL, got INT`,
+				`line 15:1: cannot assign BOOL to "i" of type INT`,
+				`line 16:11: argument for input "t" of function "IsHot" must be INT, got BOOL`,
+			},
+		},
+		{
+			name: "INT в BOOL-возврат функции",
+			src:  "FUNCTION F : BOOL\nVAR_INPUT i : INT; END_VAR\nF := i;\nEND_FUNCTION",
+			want: []string{`line 3:1: cannot assign INT to "F" of type BOOL`},
+		},
+		{
+			name: "ФБ с BOOL: вход, выход, члены, логическая операция над членом",
+			src: pous + `PROGRAM P
+VAR l : Latch; i : INT; b : BOOL; END_VAR
+l(Set := i);
+l(Q => i);
+l.Set := 1;
+i := l.Q;
+IF l.Q AND i THEN i := 0; END_IF
+l(Reset := 0);
+END_PROGRAM`,
+			want: []string{
+				`line 13:2: input "Set" of "Latch" must be BOOL, got INT`,
+				`line 14:2: output "Q" of "Latch" is BOOL, cannot bind it to "i" of type INT`,
+				`line 15:1: cannot assign INT to "l.Set" of type BOOL`,
+				`line 16:1: cannot assign BOOL to "i" of type INT`,
+				`line 17:8: operator "AND" requires BOOL operands, got BOOL and INT`,
+				`line 18:2: input "Reset" of "Latch" must be BOOL, got INT`,
+			},
+		},
+		{
+			// Invalid у операнда гасит каскад: под NOT и в AND ошибка одна —
+			// о необъявленном имени.
+			name: "нет каскада: необъявленное имя под NOT и в AND",
+			src: `PROGRAM P
+VAR b : BOOL; END_VAR
+IF NOT q THEN b := TRUE; END_IF
+b := q AND b;
+END_PROGRAM`,
+			want: []string{
+				`line 3:8: undeclared variable "q"`,
+				`line 4:6: undeclared variable "q"`,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := check(t, tc.src)
+			if len(errs) != len(tc.want) {
+				t.Fatalf("ошибок: got %d, want %d\ngot: %v", len(errs), len(tc.want), errs)
+			}
+			for i, sub := range tc.want {
+				if !strings.Contains(errs[i].Error(), sub) {
+					t.Errorf("ошибка %d: %q не содержит %q", i, errs[i].Error(), sub)
+				}
+				// Конверсий BOOL ↔ INT нет: подсказка про INT_TO_REAL /
+				// REAL_TO_INT к ошибкам с BOOL не относится.
+				if strings.Contains(errs[i].Error(), "INT_TO_REAL") {
+					t.Errorf("ошибка %d: %q подсказывает конверсию, которой для BOOL нет", i, errs[i].Error())
+				}
+			}
+		})
+	}
+}
+
 // TestInfo — side-table: адаптивные литералы получают тип контекста (в
-// том числе под унарным минусом), сравнение — BOOL, вызванные конверсии
-// попадают в UsedBuiltins.
+// том числе под унарным минусом), сравнение, логическая операция, NOT и
+// булев литерал — BOOL, вызванные конверсии попадают в UsedBuiltins.
 func TestInfo(t *testing.T) {
 	sf, info, errs := checkInfo(t, `PROGRAM P
-VAR r : REAL; i : INT; END_VAR
+VAR r : REAL; i : INT; b1 : BOOL; b2 : BOOL; END_VAR
 r := 1 / 2;
 r := -1;
 i := REAL_TO_INT(r) + 1;
 IF r > 1 THEN i := 0; END_IF
+b1 := b1 AND b2;
+b2 := TRUE;
+b1 := NOT b2;
 END_PROGRAM`)
 	if len(errs) > 0 {
 		t.Fatalf("неожиданные ошибки: %v", errs)
@@ -991,6 +1330,17 @@ END_PROGRAM`)
 	cond := body[3].(*ast.IfStatement).Condition
 	if info.Types[cond] != sema.Bool {
 		t.Errorf("условие IF: %v, ожидался BOOL", info.Types[cond])
+	}
+	and := assign(4).Value.(*ast.BinaryExpr)
+	if info.Types[and] != sema.Bool || info.Types[and.Left] != sema.Bool || info.Types[and.Right] != sema.Bool {
+		t.Errorf("b1 AND b2: %v / %v / %v, ожидался BOOL", info.Types[and], info.Types[and.Left], info.Types[and.Right])
+	}
+	if lit := assign(5).Value.(*ast.BoolLiteral); info.Types[lit] != sema.Bool {
+		t.Errorf("TRUE: %v, ожидался BOOL", info.Types[lit])
+	}
+	not := assign(6).Value.(*ast.UnaryExpr)
+	if info.Types[not] != sema.Bool || info.Types[not.Operand] != sema.Bool {
+		t.Errorf("NOT b2: %v / %v, ожидался BOOL", info.Types[not], info.Types[not.Operand])
 	}
 	if !info.UsedBuiltins["REAL_TO_INT"] || info.UsedBuiltins["INT_TO_REAL"] {
 		t.Errorf("UsedBuiltins: %v, ожидался только REAL_TO_INT", info.UsedBuiltins)

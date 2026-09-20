@@ -9,8 +9,14 @@
 // которую забирает codegen. Смешение INT и REAL запрещено — только явные
 // конверсии INT_TO_REAL / REAL_TO_INT (встроенные функции). Целый литерал
 // адаптивен: в контексте REAL он становится REAL (`r := 1 / 2;` —
-// вещественное деление). Условие IF обязано быть BOOL (результатом
-// сравнения), FOR — только по INT.
+// вещественное деление). Условие IF обязано быть BOOL, FOR — только по INT.
+//
+// BOOL (этап 3 плана BOOL): объявляемый скаляр с литералами TRUE/FALSE.
+// Логические AND/OR/XOR/NOT определены только над BOOL; сравнивать BOOL
+// можно только через = и <>, порядковые < > <= >= над BOOL — ошибка (так
+// сохраняется диагностика ловушки `a < b < c`). Адаптивного булева литерала
+// нет: `b := 1;` и `i := TRUE;` — ошибки, конверсий BOOL ↔ INT нет. Условие
+// IF — любое выражение типа BOOL, не только сравнение.
 //
 // Экземпляры ФБ (этап 6): объявление `inst : Counter;` резолвится в
 // объявленный FUNCTION_BLOCK, нерезолвившийся тип — ошибка. Снаружи доступен
@@ -47,7 +53,7 @@ const (
 	Unknown
 	Int
 	Real
-	Bool   // результат сравнения; объявить `x : BOOL;` пока нельзя
+	Bool   // объявляемый тип; результат сравнения и логической операции
 	FBInst // экземпляр ФБ — не значение и не lvalue
 )
 
@@ -71,6 +77,8 @@ func builtinType(name string) (TypeKind, bool) {
 		return Int, true
 	case "REAL":
 		return Real, true
+	case "BOOL":
+		return Bool, true
 	}
 	return Invalid, false
 }
@@ -212,9 +220,15 @@ func (c *checker) kindOf(name string) TypeKind {
 	return Invalid
 }
 
+// isScalar — типы-значения (INT, REAL, BOOL) в отличие от служебных
+// Invalid/Unknown и экземпляра ФБ; единственная точка, где они перечислены.
+func isScalar(k TypeKind) bool {
+	return k == Int || k == Real || k == Bool
+}
+
 // scalarOnly сводит тип к подсказке для hintOf: значимы только скаляры.
 func scalarOnly(k TypeKind) TypeKind {
-	if k == Int || k == Real {
+	if isScalar(k) {
 		return k
 	}
 	return Unknown
@@ -304,10 +318,12 @@ func (c *checker) checkStatement(s ast.Statement) {
 		got := c.typeOf(st.Value, want)
 		c.checkAssign(st.Tok, targetName(st.Target), want, got)
 	case *ast.IfStatement:
-		// Условие — только BOOL, т.е. результат сравнения (решение 6 плана
-		// REAL): `IF x THEN` с INT/REAL — ошибка.
+		// Условие — любое выражение типа BOOL: сравнение, логическая
+		// операция, переменная или член BOOL (решение 6 плана REAL,
+		// расширенное типом BOOL). `IF x THEN` с INT/REAL — ошибка:
+		// адаптивного булева литерала и неявных конверсий в BOOL нет.
 		if t := c.typeOf(st.Condition, Bool); t != Invalid && t != Bool {
-			c.errorf(exprTok(st.Condition), "IF condition must be BOOL (a comparison), got %s", t)
+			c.errorf(exprTok(st.Condition), "IF condition must be BOOL, got %s", t)
 		}
 		c.checkStatements(st.Then)
 		c.checkStatements(st.Else)
@@ -336,8 +352,9 @@ func (c *checker) checkForBound(e ast.Expression, what string) {
 }
 
 // checkAssign — совместимость при записи: тип значения обязан совпадать с
-// типом цели (BOOL в цель нельзя — переменных BOOL нет). Invalid с любой
-// стороны — ошибка уже выдана, каскада не нужно.
+// типом цели; подсказка про конверсии — только для пары INT/REAL (между
+// BOOL и числами конверсий нет). Invalid с любой стороны — ошибка уже
+// выдана, каскада не нужно.
 func (c *checker) checkAssign(tok lexer.Token, name string, want, got TypeKind) {
 	if want == Invalid || got == Invalid || want == got {
 		return
@@ -374,6 +391,8 @@ func exprTok(e ast.Expression) lexer.Token {
 	case *ast.IntLiteral:
 		return ex.Tok
 	case *ast.RealLiteral:
+		return ex.Tok
+	case *ast.BoolLiteral:
 		return ex.Tok
 	case *ast.UnaryExpr:
 		return ex.Tok
@@ -412,7 +431,8 @@ func (c *checker) checkWrite(target ast.Expression) TypeKind {
 
 // typeOf выводит тип выражения снизу вверх и записывает его в side-table.
 // want — тип контекста: в контексте REAL целый литерал становится REAL
-// (адаптивный литерал, решение 2 плана REAL); Invalid — контекст уже
+// (адаптивный литерал, решение 2 плана REAL; контекст BOOL литерал не
+// меняет — адаптивного булева литерала нет); Invalid — контекст уже
 // ошибочен, диапазон литералов не проверяется (нет каскада). Совместимость
 // с want здесь не проверяется — это делает вызывающий, знающий контекст
 // (присваивание, аргумент, условие).
@@ -443,7 +463,23 @@ func (c *checker) infer(e ast.Expression, want TypeKind) TypeKind {
 	case *ast.RealLiteral:
 		c.checkRealRange(ex)
 		return Real
+	case *ast.BoolLiteral:
+		// Адаптивного булева литерала нет (решение 5 плана BOOL): TRUE/FALSE
+		// всегда BOOL, `i := TRUE;` отвергнет присваивание.
+		return Bool
 	case *ast.UnaryExpr:
+		if ex.Op == ast.NOT {
+			// NOT определён только над BOOL; контекст операнда — BOOL.
+			t := c.typeOf(ex.Operand, Bool)
+			if t == Invalid {
+				return Invalid
+			}
+			if t != Bool {
+				c.errorf(ex.Tok, "NOT requires a BOOL operand, got %s", t)
+				return Invalid
+			}
+			return Bool
+		}
 		// `-32768` разбирается как NEG(Int(32768)): знак учитывается до
 		// проверки диапазона, иначе минимум INT ложно выпадал бы из него.
 		// Тип литерала записывается отдельно — codegen эмитит его сам.
@@ -473,13 +509,20 @@ func (c *checker) infer(e ast.Expression, want TypeKind) TypeKind {
 	return Invalid
 }
 
-// inferBinary: операнды одного типа; арифметика возвращает его же,
-// сравнение — BOOL. Контекст операндов — подсказка hintOf от операнда с
-// известным типом (так `IF 1 > r` и `IF r > 1` симметричны, а в `i + 1`
-// литерал не уезжает в REAL из-за цели присваивания), и только для
-// выражения из одних литералов — want сверху (`r := 1 / 2` — вещественное
-// деление).
+// inferBinary разводит три класса операций: логическая (isLogical —
+// inferLogical), сравнение (isComparison) и арифметика. Для сравнения и
+// арифметики операнды одного типа; арифметика возвращает его же, сравнение
+// — BOOL. Контекст операндов — подсказка hintOf от операнда с известным
+// типом (так `IF 1 > r` и `IF r > 1` симметричны, а в `i + 1` литерал не
+// уезжает в REAL из-за цели присваивания), и только для выражения из одних
+// литералов — want сверху (`r := 1 / 2` — вещественное деление). BOOL в
+// арифметике — ошибка; в сравнении BOOL допускается только для = и <>
+// (решение 6 плана BOOL): порядковые над BOOL — ошибка, что сохраняет
+// диагностику ловушки `a < b < c` (это `(a < b) < c`, левый операнд — BOOL).
 func (c *checker) inferBinary(ex *ast.BinaryExpr, want TypeKind) TypeKind {
+	if isLogical(ex.Op) {
+		return c.inferLogical(ex)
+	}
 	cmp := isComparison(ex.Op)
 	w := c.hintOf(ex.Left)
 	if w == Unknown {
@@ -494,12 +537,15 @@ func (c *checker) inferBinary(ex *ast.BinaryExpr, want TypeKind) TypeKind {
 		return Invalid
 	}
 	if lt == Bool || rt == Bool {
-		if cmp {
-			c.errorf(ex.Tok, "cannot compare BOOL values")
-		} else {
+		switch {
+		case !cmp:
 			c.errorf(ex.Tok, "operator %q is not applicable to BOOL", ex.Op)
+			return Invalid
+		case isOrdering(ex.Op):
+			c.errorf(ex.Tok, "cannot order BOOL values (operands of %q are %s and %s; BOOL is compared only with = and <>)",
+				ex.Op, lt, rt)
+			return Invalid
 		}
-		return Invalid
 	}
 	if lt != rt {
 		c.errorf(ex.Tok, "operands of %q have different types: %s and %s%s", ex.Op, lt, rt, convHint(lt, rt))
@@ -511,6 +557,32 @@ func (c *checker) inferBinary(ex *ast.BinaryExpr, want TypeKind) TypeKind {
 	return lt
 }
 
+// inferLogical — AND/OR/XOR: контекст обоих операндов всегда BOOL (подсказка
+// соседа не нужна — операция определена только над BOOL), оба обязаны быть
+// BOOL, результат BOOL. Invalid у операнда — ошибка уже выдана, каскада нет.
+func (c *checker) inferLogical(ex *ast.BinaryExpr) TypeKind {
+	lt := c.typeOf(ex.Left, Bool)
+	rt := c.typeOf(ex.Right, Bool)
+	if lt == Invalid || rt == Invalid {
+		return Invalid
+	}
+	if lt != Bool || rt != Bool {
+		c.errorf(ex.Tok, "operator %q requires BOOL operands, got %s and %s", ex.Op, lt, rt)
+		return Invalid
+	}
+	return Bool
+}
+
+// isLogical — AND (в том числе синоним `&`), OR, XOR: только над BOOL.
+func isLogical(op ast.Op) bool {
+	switch op {
+	case ast.AND, ast.OR, ast.XOR:
+		return true
+	}
+	return false
+}
+
+// isComparison — отношения и равенство: результат BOOL.
 func isComparison(op ast.Op) bool {
 	switch op {
 	case ast.LT, ast.LE, ast.GT, ast.GE, ast.EQ, ast.NE:
@@ -519,10 +591,20 @@ func isComparison(op ast.Op) bool {
 	return false
 }
 
+// isOrdering — порядковые сравнения (< <= > >=): над BOOL не определены,
+// в отличие от равенства = и <>.
+func isOrdering(op ast.Op) bool {
+	switch op {
+	case ast.LT, ast.LE, ast.GT, ast.GE:
+		return true
+	}
+	return false
+}
+
 // hintOf — предварительный вывод типа без записи в side-table и без ошибок:
-// тип переменной, члена, возврата функции, вещественного литерала; для
-// сравнения — Bool. Unknown — контекст не задаёт (одни целые литералы,
-// необъявленное имя, экземпляр ФБ).
+// тип переменной, члена, возврата функции, вещественного и булева литерала;
+// для сравнения, логической операции и NOT — Bool. Unknown — контекст не
+// задаёт (одни целые литералы, необъявленное имя, экземпляр ФБ).
 func (c *checker) hintOf(e ast.Expression) TypeKind {
 	switch ex := e.(type) {
 	case *ast.Identifier:
@@ -531,10 +613,15 @@ func (c *checker) hintOf(e ast.Expression) TypeKind {
 		}
 	case *ast.RealLiteral:
 		return Real
+	case *ast.BoolLiteral:
+		return Bool
 	case *ast.UnaryExpr:
+		if ex.Op == ast.NOT {
+			return Bool
+		}
 		return c.hintOf(ex.Operand)
 	case *ast.BinaryExpr:
-		if isComparison(ex.Op) {
+		if isComparison(ex.Op) || isLogical(ex.Op) {
 			return Bool
 		}
 		if h := c.hintOf(ex.Left); h != Unknown {
@@ -658,7 +745,7 @@ func (c *checker) checkCall(call *ast.CallExpr) TypeKind {
 // returnKind — тип результата вызова функции; ошибку о нерезолвящемся или
 // ФБ-типе возврата выдаёт проверка самой функции.
 func (c *checker) returnKind(fn *ast.Function) TypeKind {
-	if k := c.kindOf(fn.ReturnType); k == Int || k == Real {
+	if k := c.kindOf(fn.ReturnType); isScalar(k) {
 		return k
 	}
 	return Invalid
