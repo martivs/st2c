@@ -44,7 +44,10 @@ var update = flag.Bool("update", false, "перегенерировать golden
 // экземпляра — на одном «состояние утекло в глобальную» не видна) и
 // fb_nested (рекурсивный _init, порядок typedef). REAL этап 4: real_all
 // (float-поля, адаптивные литералы, конверсии с хелпером округления, %g в
-// драйвере — все величины точны в двоичном представлении).
+// драйвере — все величины точны в двоичном представлении). BOOL этап 5:
+// bool_all (_Bool-поля, параметры и возврат, логические операции с
+// приоритетами IEC, NOT, XOR → !=, SR-защёлка и T-триггер с BOOL-состоянием
+// за три скана, %d в драйвере печатает 0/1).
 var goldenExamples = []string{
 	"vars_all",
 	"expr_all",
@@ -58,6 +61,7 @@ var goldenExamples = []string{
 	"fb_counter",
 	"fb_nested",
 	"real_all",
+	"bool_all",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
@@ -66,6 +70,7 @@ var goldenExamples = []string{
 var exampleScans = map[string]int{
 	"fb_counter": 3,
 	"fb_nested":  3,
+	"bool_all":   3,
 }
 
 // runTimeout — предел на запуск собранного бинаря: режим отказа сломанного

@@ -1,0 +1,347 @@
+Function(InRange : BOOL)
+  VarBlock(VAR_INPUT)
+    VarDecl(v : INT)
+    VarDecl(lo : INT)
+    VarDecl(hi : INT)
+  Assign
+    Target:
+      Ident(InRange)
+    Value:
+      Binary(AND)
+        Binary(>=)
+          Ident(v)
+          Ident(lo)
+        Binary(<=)
+          Ident(v)
+          Ident(hi)
+Function(Gate : INT)
+  VarBlock(VAR_INPUT)
+    VarDecl(en : BOOL)
+    VarDecl(v : INT)
+  Assign
+    Target:
+      Ident(Gate)
+    Value:
+      Int(0)
+  If
+    Cond:
+      Ident(en)
+    Then:
+      Assign
+        Target:
+          Ident(Gate)
+        Value:
+          Ident(v)
+FunctionBlock(Latch)
+  VarBlock(VAR_INPUT)
+    VarDecl(set : BOOL)
+    VarDecl(rst : BOOL)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(q : BOOL)
+  Assign
+    Target:
+      Ident(q)
+    Value:
+      Binary(AND)
+        Binary(OR)
+          Ident(q)
+          Ident(set)
+        Unary(NOT)
+          Ident(rst)
+FunctionBlock(Toggle)
+  VarBlock(VAR_INPUT)
+    VarDecl(t : BOOL)
+      Init:
+        Bool(TRUE)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(q : BOOL)
+  Assign
+    Target:
+      Ident(q)
+    Value:
+      Binary(XOR)
+        Ident(q)
+        Ident(t)
+Program(BoolAll)
+  VarBlock(VAR)
+    VarDecl(on : BOOL)
+      Init:
+        Bool(TRUE)
+    VarDecl(off : BOOL)
+      Init:
+        Bool(FALSE)
+    VarDecl(n : INT)
+      Init:
+        Int(7)
+    VarDecl(gt : BOOL)
+    VarDecl(both : BOOL)
+    VarDecl(either : BOOL)
+    VarDecl(differ : BOOL)
+    VarDecl(neither : BOOL)
+    VarDecl(prec : BOOL)
+    VarDecl(grouped : BOOL)
+    VarDecl(chain : BOOL)
+    VarDecl(cmp : INT)
+    VarDecl(inside : BOOL)
+    VarDecl(gated : INT)
+    VarDecl(i : INT)
+    VarDecl(seen : BOOL)
+    VarDecl(allSmall : BOOL)
+    VarDecl(cycle : INT)
+    VarDecl(armed : BOOL)
+    VarDecl(held : BOOL)
+    VarDecl(flipped : BOOL)
+    VarDecl(sr : Latch)
+    VarDecl(flip : Toggle)
+  Assign
+    Target:
+      Ident(gt)
+    Value:
+      Binary(>)
+        Ident(n)
+        Int(5)
+  Assign
+    Target:
+      Ident(both)
+    Value:
+      Binary(AND)
+        Ident(on)
+        Ident(gt)
+  Assign
+    Target:
+      Ident(either)
+    Value:
+      Binary(OR)
+        Ident(off)
+        Ident(gt)
+  Assign
+    Target:
+      Ident(differ)
+    Value:
+      Binary(XOR)
+        Ident(on)
+        Ident(gt)
+  Assign
+    Target:
+      Ident(neither)
+    Value:
+      Binary(AND)
+        Unary(NOT)
+          Ident(off)
+        Unary(NOT)
+          Ident(differ)
+  Assign
+    Target:
+      Ident(prec)
+    Value:
+      Binary(OR)
+        Ident(on)
+        Binary(AND)
+          Ident(off)
+          Ident(off)
+  Assign
+    Target:
+      Ident(grouped)
+    Value:
+      Binary(AND)
+        Binary(OR)
+          Ident(on)
+          Ident(off)
+        Ident(off)
+  Assign
+    Target:
+      Ident(chain)
+    Value:
+      Binary(OR)
+        Ident(on)
+        Binary(XOR)
+          Ident(off)
+          Binary(AND)
+            Ident(gt)
+            Ident(both)
+  Assign
+    Target:
+      Ident(cmp)
+    Value:
+      Int(0)
+  If
+    Cond:
+      Ident(on)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(1)
+  If
+    Cond:
+      Unary(NOT)
+        Ident(off)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(2)
+  If
+    Cond:
+      Binary(AND)
+        Binary(>)
+          Ident(n)
+          Int(5)
+        Binary(<)
+          Ident(n)
+          Int(10)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(4)
+  If
+    Cond:
+      Binary(OR)
+        Ident(differ)
+        Binary(=)
+          Ident(n)
+          Int(0)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(8)
+  If
+    Cond:
+      Binary(=)
+        Ident(gt)
+        Ident(on)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(16)
+  If
+    Cond:
+      Binary(<>)
+        Ident(gt)
+        Ident(off)
+    Then:
+      Assign
+        Target:
+          Ident(cmp)
+        Value:
+          Binary(+)
+            Ident(cmp)
+            Int(32)
+  Assign
+    Target:
+      Ident(inside)
+    Value:
+      Call
+        Callee:
+          Ident(InRange)
+        Arg
+          Ident(n)
+        Arg
+          Int(1)
+        Arg
+          Int(10)
+  Assign
+    Target:
+      Ident(gated)
+    Value:
+      Binary(+)
+        Call
+          Callee:
+            Ident(Gate)
+          Arg
+            Ident(inside)
+          Arg
+            Ident(n)
+        Call
+          Callee:
+            Ident(Gate)
+          Arg(en :=)
+            Unary(NOT)
+              Ident(inside)
+          Arg(v :=)
+            Int(100)
+  Assign
+    Target:
+      Ident(seen)
+    Value:
+      Bool(FALSE)
+  Assign
+    Target:
+      Ident(allSmall)
+    Value:
+      Bool(TRUE)
+  For(i)
+    Start:
+      Int(1)
+    End:
+      Int(10)
+    Do:
+      Assign
+        Target:
+          Ident(seen)
+        Value:
+          Binary(OR)
+            Ident(seen)
+            Binary(=)
+              Ident(i)
+              Ident(n)
+      Assign
+        Target:
+          Ident(allSmall)
+        Value:
+          Binary(AND)
+            Ident(allSmall)
+            Binary(<)
+              Ident(i)
+              Int(5)
+  Assign
+    Target:
+      Ident(cycle)
+    Value:
+      Binary(+)
+        Ident(cycle)
+        Int(1)
+  Assign
+    Target:
+      Ident(armed)
+    Value:
+      Unary(NOT)
+        Ident(armed)
+  CallStmt
+    Call
+      Callee:
+        Ident(sr)
+      Arg(set :=)
+        Binary(=)
+          Ident(cycle)
+          Int(1)
+      Arg(rst :=)
+        Binary(=)
+          Ident(cycle)
+          Int(3)
+      Arg(q =>)
+        Ident(held)
+  CallStmt
+    Call
+      Callee:
+        Ident(flip)
+      Arg(q =>)
+        Ident(flipped)
