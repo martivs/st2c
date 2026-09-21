@@ -175,17 +175,21 @@ func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error)
 // Типы: единственная точка маппинга ST → C
 // ---------------------------------------------------------------------------
 
-// cTypes — таблица маппинга типов; литералов "int16_t"/"float" нет больше
-// нигде. Ключ — верхний регистр (имена типов IEC регистронезависимы).
+// cTypes — таблица маппинга типов; литералов "int16_t"/"float"/"_Bool" нет
+// больше нигде. Ключ — верхний регистр (имена типов IEC регистронезависимы).
 // REAL → float (32 бита по IEC; LREAL → double оставлен на будущее).
+// BOOL → _Bool: ключевое слово C99, нового #include не требует (bool +
+// <stdbool.h> отвергнут — лишний include во всех эталонах); _Bool
+// самонормализуется: любое ненулевое значение хранится как ровно 1.
 var cTypes = map[string]string{
 	"INT":  "int16_t",
 	"REAL": "float",
+	"BOOL": "_Bool",
 }
 
 // cWideTypes — тип счётчика FOR: шире переменной цикла, чтобы прибавление
-// шага у границы диапазона не переполнялось (решение 6). REAL здесь нет
-// сознательно: FOR по REAL отвергает sema, а ошибка cWideType остаётся
+// шага у границы диапазона не переполнялось (решение 6). REAL и BOOL здесь
+// нет сознательно: FOR по ним отвергает sema, а ошибка cWideType остаётся
 // внутренней защитой.
 var cWideTypes = map[string]string{
 	"INT": "int32_t",
@@ -196,14 +200,17 @@ var cWideTypes = map[string]string{
 var cZeros = map[string]string{
 	"INT":  "0",
 	"REAL": "0.0f",
+	"BOOL": "0",
 }
 
 // cFormats — спецификатор printf для печати поля драйвером -main. Формат —
 // часть контракта .expected: %d для INT (int16_t промоутится до int), %g для
-// REAL (шесть значащих цифр; float → double в varargs штатный).
+// REAL (шесть значащих цифр; float → double в varargs штатный), %d для BOOL
+// (_Bool в varargs промоутится до int; печатается 0/1, не TRUE/FALSE).
 var cFormats = map[string]string{
 	"INT":  "%d",
 	"REAL": "%g",
+	"BOOL": "%d",
 }
 
 func cType(typeName string, tok lexer.Token) (string, error) {
@@ -845,11 +852,21 @@ func (g *gen) forStmt(s *ast.ForStatement) error {
 // Выражения
 // ---------------------------------------------------------------------------
 
-// cOps — таблица ast.Op → оператор C: расходятся только EQ и NE.
+// cOps — таблица ast.Op → оператор C. Логические: AND → &&, OR → ||,
+// XOR → != (а не ^: на _Bool это одно и то же, но != не зависит от
+// нормализации значения, если BOOL когда-нибудь переедет на uint8_t).
+// Короткое замыкание &&/|| ненаблюдаемо: у функций ST нет состояния и
+// побочных эффектов, а ФБ в выражениях не вызываются (проверяет sema).
 var cOps = map[ast.Op]string{
 	ast.ADD: "+", ast.SUB: "-", ast.MUL: "*", ast.DIV: "/",
 	ast.LT: "<", ast.LE: "<=", ast.GT: ">", ast.GE: ">=",
 	ast.EQ: "==", ast.NE: "!=",
+	ast.AND: "&&", ast.OR: "||", ast.XOR: "!=",
+}
+
+// cUnaryOps — таблица унарных операций: NEG → -, NOT → !.
+var cUnaryOps = map[ast.Op]string{
+	ast.NEG: "-", ast.NOT: "!",
 }
 
 // expr возвращает C-текст выражения. Каждая бинарная и унарная операция — в
@@ -877,6 +894,14 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 	case *ast.RealLiteral:
 		return cFloatLit(e.Value), nil
 
+	case *ast.BoolLiteral:
+		// TRUE/FALSE → 1/0: _Bool — арифметический тип C99, отдельных
+		// литералов (и <stdbool.h>) не требует.
+		if e.Value {
+			return "1", nil
+		}
+		return "0", nil
+
 	case *ast.BinaryExpr:
 		left, err := g.expr(e.Left)
 		if err != nil {
@@ -893,14 +918,15 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 		return fmt.Sprintf("(%s %s %s)", left, op, right), nil
 
 	case *ast.UnaryExpr:
-		if e.Op != ast.NEG {
+		op, ok := cUnaryOps[e.Op]
+		if !ok {
 			return "", fmt.Errorf("line %d: codegen: unsupported unary operator %s", e.Line(), e.Op)
 		}
 		operand, err := g.expr(e.Operand)
 		if err != nil {
 			return "", err
 		}
-		return "(-" + operand + ")", nil
+		return "(" + op + operand + ")", nil
 
 	case *ast.CallExpr:
 		return g.call(e)

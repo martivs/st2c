@@ -27,7 +27,7 @@ func TestCFloatLit(t *testing.T) {
 }
 
 func TestZeroLiteral(t *testing.T) {
-	tests := map[string]string{"INT": "0", "int": "0", "REAL": "0.0f", "Real": "0.0f"}
+	tests := map[string]string{"INT": "0", "int": "0", "REAL": "0.0f", "Real": "0.0f", "BOOL": "0", "Bool": "0"}
 	for typ, want := range tests {
 		if got := zeroLiteral(typ); got != want {
 			t.Errorf("zeroLiteral(%q) = %q, want %q", typ, got, want)
