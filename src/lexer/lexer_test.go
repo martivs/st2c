@@ -69,6 +69,62 @@ func TestAllTokens(t *testing.T) {
 			},
 		},
 		{
+			name:  "control-flow keywords",
+			input: "ELSIF WHILE END_WHILE REPEAT UNTIL END_REPEAT EXIT",
+			want: []expTok{
+				{ELSIF, "ELSIF"}, {WHILE, "WHILE"}, {END_WHILE, "END_WHILE"},
+				{REPEAT, "REPEAT"}, {UNTIL, "UNTIL"}, {END_REPEAT, "END_REPEAT"},
+				{EXIT, "EXIT"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "control-flow keywords in mixed case",
+			input: "elsif While end_while rePeat until End_Repeat Exit",
+			want: []expTok{
+				{ELSIF, "ELSIF"}, {WHILE, "WHILE"}, {END_WHILE, "END_WHILE"},
+				{REPEAT, "REPEAT"}, {UNTIL, "UNTIL"}, {END_REPEAT, "END_REPEAT"},
+				{EXIT, "EXIT"},
+				{EOF, ""},
+			},
+		},
+		{
+			// `ELSIF` — одно слово и один токен; `ELSE IF` — два токена, то есть
+			// другая конструкция (вложенный IF со своим END_IF).
+			name:  "elsif is one token, else if is two",
+			input: "ELSIF ELSE IF",
+			want: []expTok{
+				{ELSIF, "ELSIF"}, {ELSE, "ELSE"}, {IF, "IF"},
+				{EOF, ""},
+			},
+		},
+		{
+			// Ключевое слово — идентификатор целиком; END_WHILEX читается
+			// readIdent'ом вместе с подчёркиванием и в keywords не находится.
+			name:  "control-flow keyword prefixes stay identifiers",
+			input: "WHILEX EXITS REPEATED UNTIL1 ELSIFX END_WHILEX",
+			want: []expTok{
+				{IDENT, "WHILEX"}, {IDENT, "EXITS"}, {IDENT, "REPEATED"},
+				{IDENT, "UNTIL1"}, {IDENT, "ELSIFX"}, {IDENT, "END_WHILEX"},
+				{EOF, ""},
+			},
+		},
+		{
+			name:  "while and repeat loops",
+			input: "WHILE n > 0 DO n := n - 1; EXIT; END_WHILE REPEAT k := k + 1; UNTIL k >= 5 END_REPEAT",
+			want: []expTok{
+				{WHILE, "WHILE"}, {IDENT, "n"}, {GT, ">"}, {INT_LIT, "0"}, {DO, "DO"},
+				{IDENT, "n"}, {ASSIGN, ":="}, {IDENT, "n"}, {MINUS, "-"}, {INT_LIT, "1"}, {SEMICOLON, ";"},
+				{EXIT, "EXIT"}, {SEMICOLON, ";"},
+				{END_WHILE, "END_WHILE"},
+				{REPEAT, "REPEAT"},
+				{IDENT, "k"}, {ASSIGN, ":="}, {IDENT, "k"}, {PLUS, "+"}, {INT_LIT, "1"}, {SEMICOLON, ";"},
+				{UNTIL, "UNTIL"}, {IDENT, "k"}, {GE, ">="}, {INT_LIT, "5"},
+				{END_REPEAT, "END_REPEAT"},
+				{EOF, ""},
+			},
+		},
+		{
 			name:  "function and function_block keywords",
 			input: "FUNCTION END_FUNCTION FUNCTION_BLOCK END_FUNCTION_BLOCK",
 			want: []expTok{
@@ -175,14 +231,17 @@ func TestAllTokens(t *testing.T) {
 		},
 		{
 			// Откаты readNumber: `.` без цифры за ней и `e` без цифры/знака
-			// с цифрой не входят в литерал.
+			// с цифрой не входят в литерал. `1EXIT` — хвост после числа читается
+			// отдельным токеном; с появлением цикла WHILE/REPEAT это уже не
+			// IDENT, а ключевое слово EXIT, но суть проверки (readNumber не
+			// съедает буквы) та же.
 			name:  "number rollbacks: range dots, member dot, trailing dot, e-ident",
 			input: "1..10 x.y 1. 1EXIT 2e 3e+ r := 1.5;",
 			want: []expTok{
 				{INT_LIT, "1"}, {DOT, "."}, {DOT, "."}, {INT_LIT, "10"},
 				{IDENT, "x"}, {DOT, "."}, {IDENT, "y"},
 				{INT_LIT, "1"}, {DOT, "."},
-				{INT_LIT, "1"}, {IDENT, "EXIT"},
+				{INT_LIT, "1"}, {EXIT, "EXIT"},
 				{INT_LIT, "2"}, {IDENT, "e"},
 				{INT_LIT, "3"}, {IDENT, "e"}, {PLUS, "+"},
 				{IDENT, "r"}, {ASSIGN, ":="}, {REAL_LIT, "1.5"}, {SEMICOLON, ";"},
@@ -350,6 +409,12 @@ func TestKeywordsCaseInsensitive(t *testing.T) {
 	assertTokens(t, "bool and Not TrUe xor faLSe or", []expTok{
 		{BOOL, "BOOL"}, {AND, "AND"}, {NOT, "NOT"}, {TRUE, "TRUE"},
 		{XOR, "XOR"}, {FALSE, "FALSE"}, {OR, "OR"},
+		{EOF, ""},
+	})
+	assertTokens(t, "ElsIf while End_While repeat UnTiL end_repeat exit", []expTok{
+		{ELSIF, "ELSIF"}, {WHILE, "WHILE"}, {END_WHILE, "END_WHILE"},
+		{REPEAT, "REPEAT"}, {UNTIL, "UNTIL"}, {END_REPEAT, "END_REPEAT"},
+		{EXIT, "EXIT"},
 		{EOF, ""},
 	})
 }

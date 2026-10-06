@@ -294,11 +294,39 @@ func (s *AssignStatement) String() string {
 	return b.String()
 }
 
-// IfStatement — `IF Condition THEN Then [ELSE Else] END_IF`.
-// Else == nil, если ветки нет.
+// ElsIfClause — одна ветка `ELSIF Cond THEN Then` внутри IfStatement.
+// Не Statement (как и Arg): это часть оператора IF, а не самостоятельный
+// оператор, поэтому маркерного метода и Line() у неё нет — позицию условия
+// sema берёт через exprTok(Cond), а codegen позиция не нужна.
+type ElsIfClause struct {
+	Cond Expression
+	Then []Statement
+	Tok  lexer.Token // токен ELSIF
+}
+
+// String печатает ветку без собственного заголовка: метку `ElsIf:` ставит
+// IfStatement.String(), чтобы ветки шли одним списком.
+func (c *ElsIfClause) String() string {
+	var b strings.Builder
+	b.WriteString("Cond:\n")
+	indent(&b, c.Cond.String(), 1)
+	b.WriteString("Then:\n")
+	for _, st := range c.Then {
+		indent(&b, st.String(), 1)
+	}
+	return b.String()
+}
+
+// IfStatement — `IF Condition THEN Then {ELSIF Cond THEN Then} [ELSE Else]
+// END_IF`. Else == nil, если ветки нет.
+//
+// Ветки ELSIF хранятся явным списком, а не склеиваются во вложенные IF внутри
+// Else: AST остаётся синтаксическим, и дерево отличает `ELSIF` от
+// `ELSE IF … END_IF END_IF` (разный текст программы).
 type IfStatement struct {
 	Condition Expression
 	Then      []Statement
+	ElsIfs    []*ElsIfClause
 	Else      []Statement
 	Tok       lexer.Token // токен IF
 }
@@ -313,6 +341,12 @@ func (s *IfStatement) String() string {
 	indent(&b, "Then:", 1)
 	for _, st := range s.Then {
 		indent(&b, st.String(), 2)
+	}
+	// Блок `ElsIf:` печатается только для непустой ветки — иначе разъехались бы
+	// golden-эталоны .ast всех существующих примеров с IF.
+	for _, cl := range s.ElsIfs {
+		indent(&b, "ElsIf:", 1)
+		indent(&b, cl.String(), 2)
 	}
 	if s.Else != nil {
 		indent(&b, "Else:", 1)
@@ -354,6 +388,67 @@ func (s *ForStatement) String() string {
 	}
 	return b.String()
 }
+
+// WhileStatement — `WHILE Cond DO Body END_WHILE`. Условие проверяется перед
+// каждой итерацией (в отличие от границ FOR, которые вычисляются один раз),
+// поэтому при ложном условии тело не выполняется ни разу.
+//
+// Метка тела в String() — `Body:`, а не `Do:`, как у For: у WHILE ключевое
+// слово DO стоит перед телом, но после условия, и `Do:` сразу за `Cond:`
+// читалось бы как «тут был токен DO».
+type WhileStatement struct {
+	Cond Expression
+	Body []Statement
+	Tok  lexer.Token // токен WHILE
+}
+
+func (s *WhileStatement) statementNode() {}
+func (s *WhileStatement) Line() int      { return s.Tok.Line }
+func (s *WhileStatement) String() string {
+	var b strings.Builder
+	b.WriteString("While\n")
+	indent(&b, "Cond:", 1)
+	indent(&b, s.Cond.String(), 2)
+	indent(&b, "Body:", 1)
+	for _, st := range s.Body {
+		indent(&b, st.String(), 2)
+	}
+	return b.String()
+}
+
+// RepeatStatement — `REPEAT Body UNTIL Cond END_REPEAT`. Тело выполняется хотя
+// бы один раз, условие проверяется после него; смысл UNTIL — «повторять, пока
+// не станет истинным». Поля в порядке исходника: сначала тело, потом условие.
+type RepeatStatement struct {
+	Body []Statement
+	Cond Expression
+	Tok  lexer.Token // токен REPEAT
+}
+
+func (s *RepeatStatement) statementNode() {}
+func (s *RepeatStatement) Line() int      { return s.Tok.Line }
+func (s *RepeatStatement) String() string {
+	var b strings.Builder
+	b.WriteString("Repeat\n")
+	indent(&b, "Body:", 1)
+	for _, st := range s.Body {
+		indent(&b, st.String(), 2)
+	}
+	indent(&b, "Until:", 1)
+	indent(&b, s.Cond.String(), 2)
+	return b.String()
+}
+
+// ExitStatement — `EXIT;`: выход из ближайшего объемлющего цикла (FOR, WHILE
+// или REPEAT). IF циклом не считается, поэтому EXIT внутри IF внутри цикла
+// законен; EXIT вне цикла отвергает sema.
+type ExitStatement struct {
+	Tok lexer.Token // токен EXIT
+}
+
+func (s *ExitStatement) statementNode() {}
+func (s *ExitStatement) Line() int      { return s.Tok.Line }
+func (s *ExitStatement) String() string { return "Exit" }
 
 // CallStatement — вызов функционального блока как оператор:
 // `inst(In := x, Out => y);`. Вызов функции в позиции оператора по IEC
