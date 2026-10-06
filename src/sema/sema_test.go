@@ -1293,6 +1293,234 @@ END_PROGRAM`,
 	}
 }
 
+// TestControl — этап 3 плана CTRL: условия ELSIF/WHILE/UNTIL проверяются тем
+// же правилом, что условие IF (общий checkCondition, ключевое слово в
+// сообщении), тела ветвей ELSIF и тел циклов обходятся, а EXIT вне цикла —
+// ошибка (счётчик циклов в checker). Порядок ошибок — порядок исходника; у
+// REPEAT тело проверяется раньше условия.
+func TestControl(t *testing.T) {
+	// POU для позитивных условий всех обещанных видов (решение 2): функция с
+	// BOOL-возвратом, ФБ с BOOL-выходом, плюс два POU, где EXIT стоит в цикле
+	// внутри FUNCTION и внутри тела ФБ (единственные пути, где счётчик циклов
+	// работает вне PROGRAM).
+	const pous = `FUNCTION Ready : BOOL
+VAR_INPUT v : INT; END_VAR
+Ready := v > 3;
+END_FUNCTION
+FUNCTION_BLOCK Gate
+VAR_INPUT en : BOOL; END_VAR
+VAR_OUTPUT done : BOOL; END_VAR
+done := en;
+END_FUNCTION_BLOCK
+FUNCTION Count : INT
+VAR_INPUT lim : INT; END_VAR
+VAR k : INT; END_VAR
+WHILE k < 100 DO
+    k := k + 1;
+    IF k > lim THEN EXIT; END_IF
+END_WHILE
+Count := k;
+END_FUNCTION
+FUNCTION_BLOCK Pump
+VAR_OUTPUT ticks : INT; END_VAR
+REPEAT
+    ticks := ticks + 1;
+    IF ticks > 2 THEN EXIT; END_IF
+UNTIL ticks > 5 END_REPEAT
+END_FUNCTION_BLOCK
+`
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			// Позитив: цепочка ELSIF с условиями всех видов (сравнение,
+			// переменная, NOT, связка, член ФБ, вызов функции); WHILE по
+			// переменной и по сравнению; WHILE с REAL — и с вещественным
+			// литералом, и с адаптивным целым; REPEAT с условием-сравнением и
+			// условием-вызовом; EXIT в каждом из трёх циклов, внутри IF и
+			// внутри ветки ELSIF, во вложенных циклах — и в цикле внутри
+			// FUNCTION и тела ФБ (это POU prelude).
+			name: "корректная программа со всеми конструкциями",
+			src: pous + `PROGRAM P
+VAR i : INT; r : REAL; b : BOOL; n : INT; g : Gate; p : Pump; END_VAR
+IF i > 10 THEN n := 1;
+ELSIF b THEN n := 2;
+ELSIF NOT b THEN n := 3;
+ELSIF b AND i > 1 THEN n := 4;
+ELSIF g.done THEN n := 5;
+ELSIF Ready(i) THEN n := 6;
+ELSE n := 7;
+END_IF
+WHILE b DO b := FALSE; END_WHILE
+WHILE i < 10 DO i := i + 1; END_WHILE
+WHILE r < 10.0 DO r := r / 2; END_WHILE
+WHILE r < 10 DO r := r / 2; END_WHILE
+REPEAT n := n + 1; UNTIL n > 5 END_REPEAT
+REPEAT n := n - 1; UNTIL Ready(n) END_REPEAT
+FOR i := 1 TO 10 DO EXIT; END_FOR
+WHILE TRUE DO EXIT; END_WHILE
+REPEAT EXIT; UNTIL b END_REPEAT
+WHILE TRUE DO IF b THEN EXIT; END_IF END_WHILE
+WHILE TRUE DO IF b THEN n := 0; ELSIF NOT b THEN EXIT; END_IF END_WHILE
+FOR i := 1 TO 3 DO FOR n := 1 TO 3 DO EXIT; END_FOR EXIT; END_FOR
+WHILE b DO REPEAT EXIT; UNTIL b END_REPEAT EXIT; END_WHILE
+n := Count(5);
+p(ticks => n);
+END_PROGRAM`,
+		},
+		{
+			name: "условие ELSIF не BOOL",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+IF i > 0 THEN i := 1;
+ELSIF i THEN i := 2;
+END_IF
+END_PROGRAM`,
+			want: []string{`line 4:7: ELSIF condition must be BOOL, got INT`},
+		},
+		{
+			name: "условие WHILE не BOOL",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+WHILE i DO i := 0; END_WHILE
+END_PROGRAM`,
+			want: []string{`line 3:7: WHILE condition must be BOOL, got INT`},
+		},
+		{
+			name: "условие UNTIL не BOOL",
+			src: `PROGRAM P
+VAR r : REAL; END_VAR
+REPEAT r := r + 1.0; UNTIL r END_REPEAT
+END_PROGRAM`,
+			want: []string{`line 3:28: UNTIL condition must be BOOL, got REAL`},
+		},
+		{
+			name: "EXIT на верхнем уровне PROGRAM",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+EXIT;
+END_PROGRAM`,
+			want: []string{`line 3:1: EXIT outside of a loop`},
+		},
+		{
+			// IF циклом не считается: счётчик он не трогает.
+			name: "EXIT в IF вне цикла",
+			src: `PROGRAM P
+VAR b : BOOL; END_VAR
+IF b THEN EXIT; ELSE EXIT; END_IF
+END_PROGRAM`,
+			want: []string{
+				`line 3:11: EXIT outside of a loop`,
+				`line 3:22: EXIT outside of a loop`,
+			},
+		},
+		{
+			name: "EXIT в FUNCTION вне цикла",
+			src: `FUNCTION F : INT
+F := 1;
+EXIT;
+END_FUNCTION
+PROGRAM P
+END_PROGRAM`,
+			want: []string{`line 3:1: EXIT outside of a loop`},
+		},
+		{
+			// Счётчик вернулся в 0 после END_WHILE — баланс ++/--.
+			name: "EXIT после END_WHILE",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+WHILE i < 3 DO i := i + 1; END_WHILE
+EXIT;
+END_PROGRAM`,
+			want: []string{`line 4:1: EXIT outside of a loop`},
+		},
+		{
+			// Пиннит «сбрасывать между POU не нужно»: счётчик не протекает из
+			// цикла предыдущего POU, потому что checker новый на каждый POU.
+			name: "цикл с EXIT в одном POU не узаконивает EXIT в следующем",
+			src: `FUNCTION F : INT
+VAR k : INT; END_VAR
+WHILE k < 3 DO k := k + 1; EXIT; END_WHILE
+F := k;
+END_FUNCTION
+PROGRAM P
+EXIT;
+END_PROGRAM`,
+			want: []string{`line 7:1: EXIT outside of a loop`},
+		},
+		{
+			// Тела новых конструкций обходятся — иначе необъявленные имена
+			// внутри них прошли бы молча.
+			name: "необъявленные имена в телах ELSIF, WHILE и REPEAT",
+			src: `PROGRAM P
+VAR b : BOOL; i : INT; END_VAR
+IF b THEN i := 1; ELSIF NOT b THEN i := q; END_IF
+WHILE b DO i := w; END_WHILE
+REPEAT i := e; UNTIL b END_REPEAT
+END_PROGRAM`,
+			want: []string{
+				`line 3:41: undeclared variable "q"`,
+				`line 4:17: undeclared variable "w"`,
+				`line 5:13: undeclared variable "e"`,
+			},
+		},
+		{
+			// Порядок обхода IF: условие, Then, условие ELSIF, тело ELSIF, Else.
+			name: "порядок ошибок в цепочке ELSIF — как в исходнике",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+IF i THEN i := q;
+ELSIF i THEN i := w;
+ELSE i := e;
+END_IF
+END_PROGRAM`,
+			want: []string{
+				`line 3:4: IF condition must be BOOL, got INT`,
+				`line 3:16: undeclared variable "q"`,
+				`line 4:7: ELSIF condition must be BOOL, got INT`,
+				`line 4:19: undeclared variable "w"`,
+				`line 5:11: undeclared variable "e"`,
+			},
+		},
+		{
+			// Нерезолвящееся условие даёт Invalid — каскада «must be BOOL» нет.
+			name: "необъявленное имя в условии WHILE не даёт каскада",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+WHILE q DO i := 1; END_WHILE
+END_PROGRAM`,
+			want: []string{`line 3:7: undeclared variable "q"`},
+		},
+		{
+			// Порядок исходника у REPEAT: тело раньше условия UNTIL.
+			name: "ошибки в теле REPEAT и в UNTIL — тело раньше условия",
+			src: `PROGRAM P
+VAR i : INT; END_VAR
+REPEAT i := q; UNTIL i END_REPEAT
+END_PROGRAM`,
+			want: []string{
+				`line 3:13: undeclared variable "q"`,
+				`line 3:22: UNTIL condition must be BOOL, got INT`,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := check(t, tc.src)
+			if len(errs) != len(tc.want) {
+				t.Fatalf("ошибок: got %d, want %d\ngot: %v", len(errs), len(tc.want), errs)
+			}
+			for i, sub := range tc.want {
+				if !strings.Contains(errs[i].Error(), sub) {
+					t.Errorf("ошибка %d: %q не содержит %q", i, errs[i].Error(), sub)
+				}
+			}
+		})
+	}
+}
+
 // TestInfo — side-table: адаптивные литералы получают тип контекста (в
 // том числе под унарным минусом), сравнение, логическая операция, NOT и
 // булев литерал — BOOL, вызванные конверсии попадают в UsedBuiltins.

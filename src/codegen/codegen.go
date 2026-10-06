@@ -432,8 +432,9 @@ func funcSignature(info *funcInfo) (string, error) {
 // ---------------------------------------------------------------------------
 
 // gen — состояние генерации: буфер, отступ, контекст текущего POU (таблица
-// имён + признак «переменные живут в struct состояния») и счётчик суффиксов
-// временных FOR (уникальность при вложенности).
+// имён + признак «переменные живут в struct состояния»), счётчик суффиксов
+// временных FOR (уникальность при вложенности) и глубина циклов (защита для
+// EXIT).
 type gen struct {
 	b      strings.Builder
 	ind    int
@@ -442,6 +443,11 @@ type gen struct {
 	funcs  map[string]*funcInfo // функции файла (ключ ToUpper) — для эмиссии вызовов
 	info   *sema.Info           // side-table sema: типы выражений, вызванные builtins
 	forSeq int
+	// loops — глубина вложенности циклов в точке эмиссии: EXIT при нуле дал бы
+	// break вне цикла. В отличие от sema, где checker новый на каждый POU, gen
+	// один на весь файл, поэтому loops сбрасывается вместе с forSeq в
+	// emitInit/emitStep/emitFunction.
+	loops int
 }
 
 // realToIntHelper — имя static-хелпера округления для REAL_TO_INT; занесено
@@ -519,7 +525,7 @@ func (g *gen) emitTypedef(info *stateInfo) error {
 // применяется к каждому имени. Поле-экземпляр ФБ рекурсивно зовёт свой
 // _init (инициализатор у экземпляра отвергла sema).
 func (g *gen) emitInit(info *stateInfo) error {
-	g.vars, g.deref, g.forSeq = info.vars, true, 0
+	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
 	g.linef("void %s_init(%s *self) {", info.cName, info.cName)
 	g.ind++
 	for _, blk := range info.blocks {
@@ -550,7 +556,7 @@ func (g *gen) emitInit(info *stateInfo) error {
 // emitStep — функция шага: тело POU со состоянием (Name_step у PROGRAM,
 // Name_body у ФБ); переменные — поля struct, обращение через self->.
 func (g *gen) emitStep(info *stateInfo) error {
-	g.vars, g.deref, g.forSeq = info.vars, true, 0
+	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
 	g.linef("void %s_%s(%s *self) {", info.cName, info.stepName, info.cName)
 	g.ind++
 	if err := g.stmts(info.body); err != nil {
@@ -569,7 +575,7 @@ func (g *gen) emitStep(info *stateInfo) error {
 // Инициализаторы VAR_INPUT игнорируются: значение параметра приходит от
 // вызывающего, все входы функции по sema обязательны (дефолты входов — долг).
 func (g *gen) emitFunction(info *funcInfo) error {
-	g.vars, g.deref, g.forSeq = info.vars, false, 0
+	g.vars, g.deref, g.forSeq, g.loops = info.vars, false, 0, 0
 	sig, err := funcSignature(info)
 	if err != nil {
 		return err
@@ -684,12 +690,8 @@ func (g *gen) stmt(s ast.Statement) error {
 		return nil
 
 	case *ast.IfStatement:
-		// Временная заглушка этапа 2 работы по ELSIF/WHILE/REPEAT/EXIT: ветки
-		// ELSIF здесь ещё не эмитятся, а молча выброшенные ветки дали бы
-		// неверный C. Этап 3 (codegen) заглушку снимает.
-		if len(s.ElsIfs) > 0 {
-			return fmt.Errorf("line %d: codegen: ELSIF is not supported yet", s.Line())
-		}
+		// Ветки ELSIF — плоская цепочка `} else if (…) {`, а не матрёшка
+		// `else { if … }`: AST хранит их явным списком (решение 1 плана CTRL).
 		cond, err := g.expr(s.Condition)
 		if err != nil {
 			return err
@@ -700,6 +702,18 @@ func (g *gen) stmt(s ast.Statement) error {
 			return err
 		}
 		g.ind--
+		for _, cl := range s.ElsIfs {
+			elsifCond, err := g.expr(cl.Cond)
+			if err != nil {
+				return err
+			}
+			g.linef("} else if (%s) {", elsifCond)
+			g.ind++
+			if err := g.stmts(cl.Then); err != nil {
+				return err
+			}
+			g.ind--
+		}
 		if s.Else != nil {
 			g.linef("} else {")
 			g.ind++
@@ -713,6 +727,62 @@ func (g *gen) stmt(s ast.Statement) error {
 
 	case *ast.ForStatement:
 		return g.forStmt(s)
+
+	case *ast.WhileStatement:
+		// Условие вычисляется заново перед каждой итерацией — в отличие от
+		// границ FOR, которые по решению 6 вычисляются один раз до входа.
+		cond, err := g.expr(s.Cond)
+		if err != nil {
+			return err
+		}
+		g.linef("while (%s) {", cond)
+		g.ind++
+		g.loops++
+		if err := g.stmts(s.Body); err != nil {
+			return err
+		}
+		g.loops--
+		g.ind--
+		g.linef("}")
+		return nil
+
+	case *ast.RepeatStatement:
+		// UNTIL c — «повторять, пока НЕ c», поэтому условие продолжения в C
+		// отрицается. Отрицание всегда в скобках: g.expr у бинарной операции
+		// уже возвращает (a > b), и выходит !((a > b)), а у переменной —
+		// !(self->b); двойные скобки -Wparentheses не смущают, а правило
+		// «скобки надёжнее читаемости» сохраняется.
+		g.linef("do {")
+		g.ind++
+		g.loops++
+		if err := g.stmts(s.Body); err != nil {
+			return err
+		}
+		g.loops--
+		g.ind--
+		cond, err := g.expr(s.Cond)
+		if err != nil {
+			return err
+		}
+		g.linef("} while (!(%s));", cond)
+		return nil
+
+	case *ast.ExitStatement:
+		// Инвариант решения 7 плана CTRL: goto в сгенерированном C не бывает
+		// никогда, поэтому EXIT — всегда просто break. Это верно потому, что
+		// единственные конструкции C, перехватывающие break, в выходе — циклы,
+		// полученные из циклов ST: обёртка FOR вокруг for (решение 6) — блок, а
+		// не цикл, и break из неё уходит именно в сам for; if тоже не ловит
+		// break. Если codegen когда-нибудь начнёт эмитить ещё одного ловца
+		// break (C-switch будущего CASE), EXIT внутри него передаётся наружу
+		// флагом __exitN — поднять флаг, выйти из switch, после switch
+		// проверить и сделать break уже из цикла. Сам флаг здесь не нужен и не
+		// реализован.
+		if g.loops == 0 {
+			return fmt.Errorf("line %d: codegen: internal: EXIT outside of a loop (sema must reject this)", s.Line())
+		}
+		g.linef("break;")
+		return nil
 
 	case *ast.CallStatement:
 		return g.callStmt(s)
@@ -844,9 +914,11 @@ func (g *gen) forStmt(s *ast.ForStatement) error {
 	g.linef("for (; %s; %s += %s) {", cond, i, st)
 	g.ind++
 	g.linef("%s = (%s)%s;", g.ref(vi), narrow, i)
+	g.loops++
 	if err := g.stmts(s.Body); err != nil {
 		return err
 	}
+	g.loops--
 	g.ind--
 	g.linef("}")
 	g.ind--

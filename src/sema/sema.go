@@ -136,6 +136,11 @@ type checker struct {
 	// функции попадают в граф вызовов: PROGRAM и ФБ из выражений не вызываются.
 	curFunc string
 	graph   map[string][]callEdge
+	// loops — глубина вложенности циклов (FOR/WHILE/REPEAT) в точке обхода:
+	// EXIT при нуле — ошибка. Сбрасывать между POU не нужно, и не из-за
+	// баланса ++/--, а потому что Check создаёт новый checker на каждый POU —
+	// счётчик физически не может протечь.
+	loops int
 }
 
 // Check проверяет дерево и возвращает side-table типов и все найденные
@@ -318,14 +323,15 @@ func (c *checker) checkStatement(s ast.Statement) {
 		got := c.typeOf(st.Value, want)
 		c.checkAssign(st.Tok, targetName(st.Target), want, got)
 	case *ast.IfStatement:
-		// Условие — любое выражение типа BOOL: сравнение, логическая
-		// операция, переменная или член BOOL (решение 6 плана REAL,
-		// расширенное типом BOOL). `IF x THEN` с INT/REAL — ошибка:
-		// адаптивного булева литерала и неявных конверсий в BOOL нет.
-		if t := c.typeOf(st.Condition, Bool); t != Invalid && t != Bool {
-			c.errorf(exprTok(st.Condition), "IF condition must be BOOL, got %s", t)
-		}
+		// Порядок обхода — как в исходнике: условие, тело, ветки ELSIF по
+		// порядку, ELSE. Ошибки sema копятся, и тесты опираются на порядок.
+		// Счётчик циклов ветвление не трогает: EXIT в IF внутри цикла законен.
+		c.checkCondition("IF", st.Condition)
 		c.checkStatements(st.Then)
+		for _, cl := range st.ElsIfs {
+			c.checkCondition("ELSIF", cl.Cond)
+			c.checkStatements(cl.Then)
+		}
 		c.checkStatements(st.Else)
 	case *ast.ForStatement:
 		// FOR остаётся целочисленным (решение 5 плана REAL): у REAL нет
@@ -339,9 +345,44 @@ func (c *checker) checkStatement(s ast.Statement) {
 		if st.Step != nil {
 			c.checkForBound(st.Step, "step")
 		}
+		c.loops++
 		c.checkStatements(st.Body)
+		c.loops--
+	case *ast.WhileStatement:
+		c.checkCondition("WHILE", st.Cond)
+		c.loops++
+		c.checkStatements(st.Body)
+		c.loops--
+	case *ast.RepeatStatement:
+		// Порядок исходника: тело раньше условия (`REPEAT … UNTIL c`).
+		c.loops++
+		c.checkStatements(st.Body)
+		c.loops--
+		c.checkCondition("UNTIL", st.Cond)
+	case *ast.ExitStatement:
+		if c.loops == 0 {
+			c.errorf(st.Tok, "EXIT outside of a loop")
+		}
 	case *ast.CallStatement:
 		c.checkFBCall(st.Call)
+	default:
+		// Предохранитель: новый тип оператора, забытый здесь, дал бы codegen
+		// дерево с типами, которых sema не выводила, — то есть C из
+		// непроверенного кода. У codegen.stmt такая защита есть изначально
+		// (unsupported statement), у sema она появилась этапом CTRL.
+		c.errs = append(c.errs, fmt.Errorf("line %d: sema: internal: unhandled statement %T", s.Line(), s))
+	}
+}
+
+// checkCondition — условие IF, ELSIF, WHILE и UNTIL: любое выражение типа
+// BOOL (сравнение, логическая операция, переменная, NOT, член ФБ, вызов
+// функции с BOOL-возвратом). Решение 6 плана REAL, расширенное типом BOOL:
+// `IF x THEN` с INT/REAL — ошибка, адаптивного булева литерала и неявных
+// конверсий в BOOL нет. kw попадает в сообщение, чтобы в цепочке
+// IF/ELSIF/ELSIF было видно, какое именно условие не BOOL.
+func (c *checker) checkCondition(kw string, e ast.Expression) {
+	if t := c.typeOf(e, Bool); t != Invalid && t != Bool {
+		c.errorf(exprTok(e), "%s condition must be BOOL, got %s", kw, t)
 	}
 }
 

@@ -202,6 +202,25 @@ func TestNameErrors(t *testing.T) {
 			src:        "FUNCTION F : INT\nVAR_OUTPUT\no : INT;\nEND_VAR\nF := 0;\nEND_FUNCTION\nPROGRAM P\nEND_PROGRAM",
 			wantSubstr: "line 2:1: codegen: VAR_OUTPUT block is not supported in FUNCTION",
 		},
+		{
+			// EXIT вне цикла отвергает sema; защита в codegen нужна на обход
+			// sema (здесь — skipSema): без неё получился бы break вне цикла, и
+			// gcc отверг бы его невнятным «break statement not within loop or
+			// switch».
+			name:       "EXIT вне цикла",
+			src:        "PROGRAM P\nEXIT;\nEND_PROGRAM",
+			wantSubstr: "line 2: codegen: internal: EXIT outside of a loop (sema must reject this)",
+			skipSema:   true,
+		},
+		{
+			// Тот же EXIT, но перед PROGRAM в файле стоит POU с циклом: пиннит,
+			// что счётчик loops в общем на весь файл gen не протекает между POU
+			// (в отличие от sema, где checker новый на каждый POU).
+			name:       "EXIT вне цикла после POU с циклом",
+			src:        "FUNCTION F : INT\nVAR k : INT;\nEND_VAR\nWHILE k < 3 DO\nk := k + 1;\nEXIT;\nEND_WHILE\nF := k;\nEND_FUNCTION\nPROGRAM P\nEXIT;\nEND_PROGRAM",
+			wantSubstr: "line 11: codegen: internal: EXIT outside of a loop (sema must reject this)",
+			skipSema:   true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
