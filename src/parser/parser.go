@@ -224,7 +224,8 @@ func (p *Parser) parseType() string {
 	}
 }
 
-// parseStatements читает операторы до терминатора блока (END_*, ELSE, EOF).
+// parseStatements читает операторы до терминатора блока (END_*, ELSIF, ELSE,
+// UNTIL, EOF).
 func (p *Parser) parseStatements() []ast.Statement {
 	var stmts []ast.Statement
 	for p.err == nil && !p.isBlockEnd() {
@@ -237,11 +238,16 @@ func (p *Parser) parseStatements() []ast.Statement {
 	return stmts
 }
 
-// isBlockEnd — токен закрывает текущий блок операторов?
+// isBlockEnd — токен закрывает текущий блок операторов? Список здесь
+// нарочно плоский: он лишь останавливает чтение операторов, а какой именно
+// терминатор был уместен, проверяет expect в правиле конструкции (так
+// `ELSIF` после `ELSE` закрывает тело ELSE и даёт внятное
+// `expected END_IF, got ELSIF`).
 func (p *Parser) isBlockEnd() bool {
 	switch p.cur.Type {
 	case lexer.END_PROGRAM, lexer.END_FUNCTION, lexer.END_FUNCTION_BLOCK,
-		lexer.END_IF, lexer.END_FOR, lexer.ELSE, lexer.EOF:
+		lexer.END_IF, lexer.ELSIF, lexer.ELSE, lexer.END_FOR,
+		lexer.END_WHILE, lexer.UNTIL, lexer.END_REPEAT, lexer.EOF:
 		return true
 	default:
 		return false
@@ -257,6 +263,12 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseIf()
 	case lexer.FOR:
 		return p.parseFor()
+	case lexer.WHILE:
+		return p.parseWhile()
+	case lexer.REPEAT:
+		return p.parseRepeat()
+	case lexer.EXIT:
+		return p.parseExit()
 	default:
 		p.fail(fmt.Sprintf("unexpected token %s %q at statement start", p.cur.Type, p.cur.Literal))
 		return nil
@@ -294,7 +306,15 @@ func (p *Parser) parseAssignOrCall() ast.Statement {
 	return &ast.AssignStatement{Target: target, Value: value, Tok: tok}
 }
 
-// parseIf: IF expression THEN {statement} [ELSE {statement}] END_IF ;?
+// parseIf: IF expression THEN {statement} {ELSIF expression THEN {statement}}
+//
+//	[ELSE {statement}] END_IF ;?
+//
+// Ветки ELSIF собираются явным списком (решение 1 плана CTRL), а не
+// склеиваются во вложенный IF внутри Else: дерево отличает `ELSIF` от
+// `ELSE IF … END_IF END_IF`. `ELSIF` после `ELSE` отвергается сам собой —
+// тело ELSE кончается на нём (он в isBlockEnd), и expect(END_IF) скажет
+// `expected END_IF, got ELSIF`.
 func (p *Parser) parseIf() ast.Statement {
 	tok := p.expect(lexer.IF)
 	cond := p.parseExpression(lowestPrec)
@@ -302,6 +322,17 @@ func (p *Parser) parseIf() ast.Statement {
 
 	stmt := &ast.IfStatement{Condition: cond, Tok: tok}
 	stmt.Then = p.parseStatements()
+
+	for p.err == nil && p.curIs(lexer.ELSIF) {
+		clauseTok := p.expect(lexer.ELSIF)
+		clauseCond := p.parseExpression(lowestPrec)
+		p.expect(lexer.THEN)
+		stmt.ElsIfs = append(stmt.ElsIfs, &ast.ElsIfClause{
+			Cond: clauseCond,
+			Then: p.parseStatements(),
+			Tok:  clauseTok,
+		})
+	}
 
 	if p.curIs(lexer.ELSE) {
 		p.expect(lexer.ELSE)
@@ -341,8 +372,49 @@ func (p *Parser) parseFor() ast.Statement {
 	return stmt
 }
 
-// optionalSemicolon съедает `;` после END_IF/END_FOR, если он есть
-// (в example.st он присутствует).
+// parseWhile: WHILE expression DO {statement} END_WHILE ;?
+func (p *Parser) parseWhile() ast.Statement {
+	tok := p.expect(lexer.WHILE)
+	cond := p.parseExpression(lowestPrec)
+	p.expect(lexer.DO)
+
+	stmt := &ast.WhileStatement{Cond: cond, Tok: tok}
+	stmt.Body = p.parseStatements()
+
+	p.expect(lexer.END_WHILE)
+	p.optionalSemicolon()
+	return stmt
+}
+
+// parseRepeat: REPEAT {statement} UNTIL expression END_REPEAT ;?
+//
+// После условия сразу END_REPEAT: по грамматике IEC точки с запятой после
+// `UNTIL expr` нет (решение 4 плана CTRL), поэтому `UNTIL a; END_REPEAT`
+// даёт `expected END_REPEAT, got ;`.
+func (p *Parser) parseRepeat() ast.Statement {
+	tok := p.expect(lexer.REPEAT)
+
+	stmt := &ast.RepeatStatement{Tok: tok}
+	stmt.Body = p.parseStatements()
+
+	p.expect(lexer.UNTIL)
+	stmt.Cond = p.parseExpression(lowestPrec)
+
+	p.expect(lexer.END_REPEAT)
+	p.optionalSemicolon()
+	return stmt
+}
+
+// parseExit: EXIT ; — точка с запятой обязательна, как после любого простого
+// оператора. Что EXIT стоит внутри цикла, проверяет sema.
+func (p *Parser) parseExit() ast.Statement {
+	tok := p.expect(lexer.EXIT)
+	p.expect(lexer.SEMICOLON)
+	return &ast.ExitStatement{Tok: tok}
+}
+
+// optionalSemicolon съедает `;` после END_IF/END_FOR/END_WHILE/END_REPEAT,
+// если он есть (в example.st он присутствует).
 func (p *Parser) optionalSemicolon() {
 	if p.curIs(lexer.SEMICOLON) {
 		p.nextToken()

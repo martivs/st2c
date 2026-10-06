@@ -684,6 +684,12 @@ func (g *gen) stmt(s ast.Statement) error {
 		return nil
 
 	case *ast.IfStatement:
+		// Временная заглушка этапа 2 работы по ELSIF/WHILE/REPEAT/EXIT: ветки
+		// ELSIF здесь ещё не эмитятся, а молча выброшенные ветки дали бы
+		// неверный C. Этап 3 (codegen) заглушку снимает.
+		if len(s.ElsIfs) > 0 {
+			return fmt.Errorf("line %d: codegen: ELSIF is not supported yet", s.Line())
+		}
 		cond, err := g.expr(s.Condition)
 		if err != nil {
 			return err

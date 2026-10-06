@@ -517,6 +517,355 @@ func TestForBy(t *testing.T) {
 	}
 }
 
+// TestControl: этап 2 работы по ELSIF/WHILE/REPEAT/EXIT — структура дерева
+// новых конструкций. Сверяется String() первого оператора тела PROGRAM; поле
+// stmts задаёт ожидаемое число операторов в теле (0 — значит один), им
+// пиннится необязательность `;` после END_WHILE/END_REPEAT.
+func TestControl(t *testing.T) {
+	tests := []struct {
+		name  string
+		stmt  string
+		stmts int    // сколько операторов ожидается в теле (0 → один)
+		want  string // String() первого оператора, без завершающего \n
+	}{
+		{
+			name: "IF с одним ELSIF, без ELSE",
+			stmt: "IF t < 10 THEN x := 1; ELSIF t < 20 THEN x := 2; END_IF",
+			want: `If
+  Cond:
+    Binary(<)
+      Ident(t)
+      Int(10)
+  Then:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)
+  ElsIf:
+    Cond:
+      Binary(<)
+        Ident(t)
+        Int(20)
+    Then:
+      Assign
+        Target:
+          Ident(x)
+        Value:
+          Int(2)`,
+		},
+		{
+			// Каждая ветка — своим блоком ElsIf, в порядке исходника; ELSE
+			// последним.
+			name: "три ELSIF и ELSE",
+			stmt: "IF a THEN x := 1; ELSIF b THEN x := 2; ELSIF c THEN x := 3; ELSIF d THEN x := 4; ELSE x := 5; END_IF",
+			want: `If
+  Cond:
+    Ident(a)
+  Then:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)
+  ElsIf:
+    Cond:
+      Ident(b)
+    Then:
+      Assign
+        Target:
+          Ident(x)
+        Value:
+          Int(2)
+  ElsIf:
+    Cond:
+      Ident(c)
+    Then:
+      Assign
+        Target:
+          Ident(x)
+        Value:
+          Int(3)
+  ElsIf:
+    Cond:
+      Ident(d)
+    Then:
+      Assign
+        Target:
+          Ident(x)
+        Value:
+          Int(4)
+  Else:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(5)`,
+		},
+		{
+			// Старая форма: вложенный If внутри Else, блока ElsIf нет ни у
+			// внешнего, ни у внутреннего IF (решение 1 — дерево различает
+			// `ELSIF` и `ELSE IF … END_IF END_IF`).
+			name: "ELSE IF даёт вложенный If внутри Else",
+			stmt: "IF a THEN x := 1; ELSE IF b THEN x := 2; END_IF END_IF",
+			want: `If
+  Cond:
+    Ident(a)
+  Then:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)
+  Else:
+    If
+      Cond:
+        Ident(b)
+      Then:
+        Assign
+          Target:
+            Ident(x)
+          Value:
+            Int(2)`,
+		},
+		{
+			name: "WHILE с пустым телом",
+			stmt: "WHILE a DO END_WHILE",
+			want: `While
+  Cond:
+    Ident(a)
+  Body:`,
+		},
+		{
+			name: "REPEAT с телом из нескольких операторов",
+			stmt: "REPEAT x := 1; y := 2; UNTIL a END_REPEAT",
+			want: `Repeat
+  Body:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)
+    Assign
+      Target:
+        Ident(y)
+      Value:
+        Int(2)
+  Until:
+    Ident(a)`,
+		},
+		{
+			name: "EXIT внутри IF внутри WHILE",
+			stmt: "WHILE a DO IF b THEN EXIT; END_IF; END_WHILE",
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    If
+      Cond:
+        Ident(b)
+      Then:
+        Exit`,
+		},
+		{
+			name: "WHILE внутри REPEAT",
+			stmt: "REPEAT WHILE a DO EXIT; END_WHILE UNTIL b END_REPEAT",
+			want: `Repeat
+  Body:
+    While
+      Cond:
+        Ident(a)
+      Body:
+        Exit
+  Until:
+    Ident(b)`,
+		},
+		{
+			name: "REPEAT внутри WHILE",
+			stmt: "WHILE a DO REPEAT EXIT; UNTIL b END_REPEAT END_WHILE",
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    Repeat
+      Body:
+        Exit
+      Until:
+        Ident(b)`,
+		},
+		{
+			name: "FOR внутри WHILE",
+			stmt: "WHILE a DO FOR i := 1 TO 3 DO EXIT; END_FOR END_WHILE",
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    For(i)
+      Start:
+        Int(1)
+      End:
+        Int(3)
+      Do:
+        Exit`,
+		},
+		{
+			name: "EXIT внутри ELSIF внутри цикла",
+			stmt: "WHILE a DO IF b THEN x := 1; ELSIF c THEN EXIT; END_IF; END_WHILE",
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    If
+      Cond:
+        Ident(b)
+      Then:
+        Assign
+          Target:
+            Ident(x)
+          Value:
+            Int(1)
+      ElsIf:
+        Cond:
+          Ident(c)
+        Then:
+          Exit`,
+		},
+		{
+			name: "регистр ключевых слов",
+			stmt: "while a do x := 1; end_while",
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)`,
+		},
+		{
+			name:  "; после END_WHILE есть",
+			stmt:  "WHILE a DO x := 1; END_WHILE; y := 2;",
+			stmts: 2,
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)`,
+		},
+		{
+			// Решение 6: `;` после END_WHILE необязательна — следующий
+			// оператор читается как обычно.
+			name:  "; после END_WHILE нет",
+			stmt:  "WHILE a DO x := 1; END_WHILE y := 2;",
+			stmts: 2,
+			want: `While
+  Cond:
+    Ident(a)
+  Body:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)`,
+		},
+		{
+			name:  "; после END_REPEAT есть",
+			stmt:  "REPEAT x := 1; UNTIL a END_REPEAT; y := 2;",
+			stmts: 2,
+			want: `Repeat
+  Body:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)
+  Until:
+    Ident(a)`,
+		},
+		{
+			name:  "; после END_REPEAT нет",
+			stmt:  "REPEAT x := 1; UNTIL a END_REPEAT y := 2;",
+			stmts: 2,
+			want: `Repeat
+  Body:
+    Assign
+      Target:
+        Ident(x)
+      Value:
+        Int(1)
+  Until:
+    Ident(a)`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "PROGRAM P\n" + tc.stmt + "\nEND_PROGRAM"
+			prog := parseOneProgram(t, src)
+			wantStmts := tc.stmts
+			if wantStmts == 0 {
+				wantStmts = 1
+			}
+			if len(prog.Body) != wantStmts {
+				t.Fatalf("операторов в теле: got %d, want %d", len(prog.Body), wantStmts)
+			}
+			got := strings.TrimRight(prog.Body[0].String(), "\n")
+			if got != tc.want {
+				t.Errorf("дерево:\n--- got ---\n%s\n--- want ---\n%s", got, tc.want)
+			}
+		})
+	}
+
+	// Решение 1 отдельной проверкой по типам узлов, а не по печати: `ELSE IF`
+	// обязан дать вложенный *ast.IfStatement внутри Else и пустой список
+	// ElsIfs, иначе дерево перестанет отличать его от `ELSIF`.
+	t.Run("ELSE IF — вложенный If, а не ElsIf", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nIF a THEN x := 1; ELSE IF b THEN x := 2; END_IF END_IF\nEND_PROGRAM")
+		outer, ok := prog.Body[0].(*ast.IfStatement)
+		if !ok {
+			t.Fatalf("ожидался IfStatement, получен %T", prog.Body[0])
+		}
+		if len(outer.ElsIfs) != 0 {
+			t.Errorf("внешний IF: ветвей ElsIf %d, ожидалось 0", len(outer.ElsIfs))
+		}
+		if len(outer.Else) != 1 {
+			t.Fatalf("ветка Else: операторов %d, ожидался 1", len(outer.Else))
+		}
+		inner, ok := outer.Else[0].(*ast.IfStatement)
+		if !ok {
+			t.Fatalf("в Else ожидался вложенный IfStatement, получен %T", outer.Else[0])
+		}
+		if len(inner.ElsIfs) != 0 {
+			t.Errorf("вложенный IF: ветвей ElsIf %d, ожидалось 0", len(inner.ElsIfs))
+		}
+	})
+
+	// Обратная проверка: у `ELSIF` ветка лежит в ElsIfs, а Else пуст.
+	t.Run("ELSIF — ветка в ElsIfs, Else пуст", func(t *testing.T) {
+		prog := parseOneProgram(t, "PROGRAM P\nIF a THEN x := 1; ELSIF b THEN x := 2; END_IF\nEND_PROGRAM")
+		stmt, ok := prog.Body[0].(*ast.IfStatement)
+		if !ok {
+			t.Fatalf("ожидался IfStatement, получен %T", prog.Body[0])
+		}
+		if len(stmt.ElsIfs) != 1 {
+			t.Fatalf("ветвей ElsIf %d, ожидалась 1", len(stmt.ElsIfs))
+		}
+		if stmt.Else != nil {
+			t.Errorf("ветка Else непуста: %v", stmt.Else)
+		}
+		if len(stmt.ElsIfs[0].Then) != 1 {
+			t.Errorf("тело ветки ELSIF: операторов %d, ожидался 1", len(stmt.ElsIfs[0].Then))
+		}
+		if tok := stmt.ElsIfs[0].Tok; tok.Type != lexer.ELSIF || tok.Line != 2 {
+			t.Errorf("токен ветки: got %s на строке %d, want ELSIF на строке 2", tok.Type, tok.Line)
+		}
+	})
+}
+
 // TestVarBlocks: фаза 4 — виды VAR-блоков, списки имён, инициализаторы,
 // пользовательские имена типов, квалификаторы CONSTANT/RETAIN.
 func TestVarBlocks(t *testing.T) {
@@ -883,6 +1232,67 @@ func TestParseErrors(t *testing.T) {
 			name:       "логический оператор вместо := после цели присваивания",
 			input:      "PROGRAM P\na AND b;\nEND_PROGRAM",
 			wantSubstr: `line 2: expected :=, got AND "AND"`,
+		},
+		{
+			// Этап 2 CTRL: ELSIF после ELSE. Отдельной проверки нет — тело
+			// ELSE кончается на ELSIF (он в isBlockEnd), и закрывающее слово
+			// не совпадает.
+			name:       "ELSIF после ELSE",
+			input:      "PROGRAM P\nIF a THEN x := 1; ELSE x := 2; ELSIF b THEN x := 3; END_IF\nEND_PROGRAM",
+			wantSubstr: `line 2: expected END_IF, got ELSIF "ELSIF"`,
+		},
+		{
+			name:       "ELSIF без условия",
+			input:      "PROGRAM P\nIF a THEN x := 1; ELSIF THEN x := 2; END_IF\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got THEN "THEN"`,
+		},
+		{
+			name:       "ELSIF без THEN",
+			input:      "PROGRAM P\nIF a THEN x := 1; ELSIF b x := 2; END_IF\nEND_PROGRAM",
+			wantSubstr: `line 2: expected THEN, got IDENT "x"`,
+		},
+		{
+			name:       "WHILE без DO",
+			input:      "PROGRAM P\nWHILE a x := 1; END_WHILE\nEND_PROGRAM",
+			wantSubstr: `line 2: expected DO, got IDENT "x"`,
+		},
+		{
+			name:       "END_FOR вместо END_WHILE",
+			input:      "PROGRAM P\nWHILE a DO x := 1; END_FOR\nEND_PROGRAM",
+			wantSubstr: `line 2: expected END_WHILE, got END_FOR "END_FOR"`,
+		},
+		{
+			name:       "REPEAT без UNTIL",
+			input:      "PROGRAM P\nREPEAT x := 1; END_REPEAT\nEND_PROGRAM",
+			wantSubstr: `line 2: expected UNTIL, got END_REPEAT "END_REPEAT"`,
+		},
+		{
+			name:       "UNTIL без условия",
+			input:      "PROGRAM P\nREPEAT x := 1; UNTIL END_REPEAT\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got END_REPEAT "END_REPEAT"`,
+		},
+		{
+			// Решение 4: после `UNTIL expr` точки с запятой по IEC нет.
+			name:       "точка с запятой после UNTIL",
+			input:      "PROGRAM P\nREPEAT x := 1; UNTIL a; END_REPEAT\nEND_PROGRAM",
+			wantSubstr: `line 2: expected END_REPEAT, got ; ";"`,
+		},
+		{
+			name:       "EXIT без точки с запятой",
+			input:      "PROGRAM P\nWHILE a DO EXIT END_WHILE\nEND_PROGRAM",
+			wantSubstr: `line 2: expected ;, got END_WHILE "END_WHILE"`,
+		},
+		{
+			// UNTIL в isBlockEnd: тело PROGRAM кончается на нём, дальше
+			// ожидается END_PROGRAM.
+			name:       "UNTIL в теле программы",
+			input:      "PROGRAM P\nUNTIL a\nEND_PROGRAM",
+			wantSubstr: `line 2: expected END_PROGRAM, got UNTIL "UNTIL"`,
+		},
+		{
+			name:       "ключевое слово цикла в выражении",
+			input:      "PROGRAM P\nx := WHILE;\nEND_PROGRAM",
+			wantSubstr: `line 2: expected expression, got WHILE "WHILE"`,
 		},
 	}
 	for _, tc := range tests {

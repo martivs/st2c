@@ -1,22 +1,31 @@
 (* Управляющие конструкции: цепочка ELSIF (первая истинная ветка, ветка без
-   ELSE, вложенный IF внутри ELSIF, старая форма ELSE IF рядом с ELSIF),
+   ELSE, вложенный IF внутри ELSIF, старая форма ELSE IF рядом с ELSIF,
+   условие-член ФБ и условие-вызов функции, EXIT внутри ветки ELSIF),
    WHILE (ноль итераций, несколько итераций, WHILE TRUE с EXIT, FOR внутри
-   WHILE, условие с REAL и адаптивным литералом, условие с NOT и связкой),
-   REPEAT (ровно одна итерация при истинном UNTIL, EXIT из REPEAT, REPEAT в
-   FUNCTION), EXIT (из FOR со значением переменной цикла, из вложенного
-   цикла — только внутренний), WHILE в теле FUNCTION_BLOCK за три скана.
+   WHILE, WHILE внутри WHILE, условие с REAL и адаптивным литералом, условие
+   с NOT и связкой, условие-BOOL-переменная), REPEAT (ровно одна итерация при
+   истинном UNTIL, EXIT из REPEAT, REPEAT внутри REPEAT, REPEAT в FUNCTION,
+   условие-вызов функции в UNTIL), EXIT (из FOR со значением переменной цикла,
+   из вложенного цикла — только внутренний, из цикла в теле FUNCTION и в теле
+   FUNCTION_BLOCK), WHILE в теле FUNCTION_BLOCK за три скана, END_WHILE и
+   END_REPEAT как с необязательной `;`, так и без неё.
 
    Проверять так:
        go run ./src -main -scans 3 -o /tmp/a.c examples/ctrl_all.st
    Ожидание (три скана; поля, не зависящие от скана, одинаковы в каждом):
    t=5 first=1 band=99 sign=2 legacy=2 whileZero=0 repeatOne=1 sum=15 k=3
    rep=3 found=5 i=3 j=3 outerCnt=3 innerCnt=6 spins=4 acc=10 r=0.625
-   halves=4 flag=1 tries=4 digitsZero=1 digitsBig=5; по сканам:
-   cycle = 1, 2, 3; mode = 10, 20, 30; lvl = 7, 10, 9; drained = 2, 3, 4.
+   halves=4 flag=1 tries=4 digitsZero=1 digitsBig=5 pick=3 taps=11 wOuter=4
+   wInner=12 wStep=3 rOuter=3 rInner=9 rStep=3 stepsUsed=6 grown=4 armed=0
+   paces=3; по сканам:
+   cycle = 1, 2, 3; mode = 10, 20, 30; lvl = 7, 10, 9; drained = 2, 3, 4;
+   rampSpeed = 6, 12, 15; rampTicks = 2, 2, 1; rampTop = 0, 1, 1;
+   gear = 2, 1, 1.
    Расчёт — в комментариях у операторов; у каждого блока указано, какое число
    даст типичная ошибка реализации (проверено на ручной C-трансляции,
    gcc -std=c99 -Wall -Wextra: каждая такая ошибка меняет число, а не вешает
-   тест). *)
+   тест; исключения — две ошибки, вешающие цикл: REPEAT без отрицания в C и
+   не сработавший EXIT при WHILE TRUE, их ловит таймаут). *)
 
 FUNCTION Digits : INT                   // REPEAT в FUNCTION: число десятичных цифр
 VAR_INPUT
@@ -52,6 +61,52 @@ END_VAR
     END_WHILE;
 END_FUNCTION_BLOCK
 
+FUNCTION StepsTo : INT                  // EXIT из WHILE в теле FUNCTION:
+VAR_INPUT                               // сколько слагаемых 1+2+3+… нужно,
+    limit : INT;                        // чтобы сумма превысила limit
+END_VAR
+VAR
+    n : INT;
+    acc : INT;
+END_VAR
+    WHILE n < 100 DO                    // граница 100 — страховка, выход по EXIT
+        n := n + 1;
+        acc := acc + n;
+        IF acc > limit THEN
+            StepsTo := n;
+            EXIT;
+        END_IF;
+    END_WHILE                           // `;` после END_WHILE опущена (решение 6)
+END_FUNCTION                            // StepsTo(20): 1+2+3+4+5+6=21 > 20 → 6
+                                        // (не сработал EXIT — 100: присваивание
+                                        //  повторится до границы страховки)
+
+FUNCTION Ripe : BOOL                    // BOOL-возврат для условий UNTIL и ELSIF
+VAR_INPUT
+    v : INT;
+END_VAR
+    Ripe := v >= 4;
+END_FUNCTION
+
+FUNCTION_BLOCK Ramp                     // EXIT из REPEAT в теле ФБ: разгон не
+VAR_INPUT                               // быстрее двух шагов за вызов
+    target : INT;
+END_VAR
+VAR_OUTPUT
+    speed : INT;                        // переживает вызов — состояние ФБ
+    ticks : INT;                        // шагов разгона за этот вызов
+    atTop : BOOL;                       // цель достигнута
+END_VAR
+    ticks := 0;
+    REPEAT                              // тело хотя бы раз: ticks ещё 0
+        IF ticks >= 2 THEN EXIT; END_IF;
+        speed := speed + 3;
+        ticks := ticks + 1;
+    UNTIL speed >= target
+    END_REPEAT                          // `;` после END_REPEAT опущена (решение 6)
+    atTop := speed >= target;
+END_FUNCTION_BLOCK
+
 PROGRAM CtrlAll
 VAR
     cycle : INT;                        // номер скана
@@ -82,6 +137,23 @@ VAR
     tank : Drain;                       // WHILE в ФБ; драйвер экземпляр не печатает
     lvl : INT;
     drained : INT;
+    pick : INT;                         // EXIT внутри ветки ELSIF
+    taps : INT;
+    wOuter : INT;                       // EXIT из WHILE, вложенного в WHILE
+    wInner : INT;
+    wStep : INT;
+    rOuter : INT;                       // EXIT из REPEAT, вложенного в REPEAT
+    rInner : INT;
+    rStep : INT;
+    stepsUsed : INT;                    // EXIT в цикле внутри FUNCTION
+    grown : INT;                        // UNTIL с условием-вызовом функции
+    armed : BOOL;                       // WHILE с условием-BOOL-переменной
+    paces : INT;
+    ramp : Ramp;                        // EXIT в REPEAT в теле ФБ
+    rampSpeed : INT;
+    rampTicks : INT;
+    rampTop : BOOL;
+    gear : INT;                         // ELSIF по члену ФБ и по вызову функции
 END_VAR
     cycle := cycle + 1;
 
@@ -235,4 +307,107 @@ END_VAR
     // Скан 2: 7 + 15 = 22 → 18 → 14 → 10; lvl = 10, drained = 3 (10 > 10 ложно).
     // Скан 3: 10 + 15 = 25 → 21 → 17 → 13 → 9; lvl = 9, drained = 4.
     tank(inflow := 15, level => lvl, steps => drained);
+
+    // ---- EXIT внутри ветки ELSIF ----
+
+    // pick = 1 → первая ветка (taps = 1); pick = 2 → первая ELSIF (taps = 11);
+    // pick = 3 → вторая ELSIF: EXIT выходит из WHILE. pick = 3, taps = 11.
+    // (Если EXIT внутри ELSIF не срабатывает — цикл дойдёт до pick = 9 и
+    //  ветка ELSE добавит 100 шесть раз: taps = 611.)
+    pick := 0;
+    taps := 0;
+    WHILE pick < 9 DO
+        pick := pick + 1;
+        IF pick = 1 THEN taps := taps + 1;
+        ELSIF pick = 2 THEN taps := taps + 10;
+        ELSIF pick = 3 THEN EXIT;
+        ELSE taps := taps + 100;
+        END_IF;
+    END_WHILE                           // `;` опущена (решение 6)
+
+    // ---- EXIT из WHILE, вложенного в WHILE ----
+
+    // Внешний WHILE — четыре итерации; внутренний на каждой делает wStep
+    // 1, 2, 3 и выходит по EXIT на третьем. wOuter = 4, wInner = 4 * 3 = 12,
+    // wStep = 3. (Если EXIT выбил бы и внешний цикл — wOuter = 1, wInner = 3;
+    //  если EXIT не срабатывает — внутренний дойдёт до 10: wInner = 40.)
+    wOuter := 0;
+    wInner := 0;
+    WHILE wOuter < 4 DO
+        wOuter := wOuter + 1;
+        wStep := 0;
+        WHILE wStep < 10 DO
+            wStep := wStep + 1;
+            wInner := wInner + 1;
+            IF wStep >= 3 THEN EXIT; END_IF;
+        END_WHILE
+    END_WHILE
+
+    // ---- EXIT из REPEAT, вложенного в REPEAT ----
+
+    // Внешний REPEAT — три итерации (UNTIL rOuter >= 3); внутренний на каждой
+    // делает rStep 1, 2, 3 и выходит по EXIT. rOuter = 3, rInner = 3 * 3 = 9,
+    // rStep = 3. (Если EXIT выбил бы и внешний — rOuter = 1, rInner = 3.)
+    rOuter := 0;
+    rInner := 0;
+    REPEAT
+        rOuter := rOuter + 1;
+        rStep := 0;
+        REPEAT
+            rStep := rStep + 1;
+            rInner := rInner + 1;
+            IF rStep >= 3 THEN EXIT; END_IF;
+        UNTIL rStep >= 9
+        END_REPEAT
+    UNTIL rOuter >= 3
+    END_REPEAT
+
+    // ---- EXIT в цикле внутри FUNCTION ----
+
+    stepsUsed := StepsTo(20);           // 6 (без EXIT — 100)
+
+    // ---- Условие-вызов функции в UNTIL ----
+
+    // grown = 1, 2, 3 — Ripe ложно; на 4 истинно → выход. grown = 4.
+    grown := 0;
+    REPEAT
+        grown := grown + 1;
+    UNTIL Ripe(grown)
+    END_REPEAT
+
+    // ---- Условие-BOOL-переменная в WHILE ----
+
+    // paces = 1, 2 — armed остаётся TRUE; paces = 3 → armed = FALSE, выход.
+    // paces = 3, armed = 0. (Условие — переменная, а не сравнение: если бы
+    //  оно вычислялось один раз до входа, как границы FOR, цикл не
+    //  остановился бы вовсе — зависание, а не неверное число.)
+    armed := TRUE;
+    paces := 0;
+    WHILE armed DO
+        paces := paces + 1;
+        armed := paces < 3;
+    END_WHILE
+
+    // ---- EXIT в REPEAT в теле ФБ, состояние между сканами ----
+
+    // Скан 1: speed 0 → 3 → 6, на третьей итерации ticks = 2 → EXIT;
+    //         rampSpeed = 6, rampTicks = 2, rampTop = 0 (6 >= 10 ложно).
+    // Скан 2: 6 → 9 → 12, выход по UNTIL (12 >= 10); rampSpeed = 12,
+    //         rampTicks = 2, rampTop = 1.
+    // Скан 3: 12 → 15, выход по UNTIL сразу; rampSpeed = 15, rampTicks = 1,
+    //         rampTop = 1.
+    ramp(target := 10, speed => rampSpeed, ticks => rampTicks, atTop => rampTop);
+
+    // ---- ELSIF по члену ФБ и по вызову функции ----
+
+    // armed здесь всегда FALSE (его оставил цикл выше), поэтому решают ELSIF.
+    // Скан 1: ramp.atTop ложно, Ripe(6) истинно → gear = 2.
+    // Сканы 2 и 3: ramp.atTop истинно → gear = 1.
+    // (Если ветки не связаны через else, то на сканах 2 и 3 сработает ещё и
+    //  последняя ветка — Ripe(12) и Ripe(15) истинны: gear = 2 вместо 1.)
+    IF armed THEN gear := 9;
+    ELSIF ramp.atTop THEN gear := 1;
+    ELSIF Ripe(rampSpeed) THEN gear := 2;
+    ELSE gear := 3;
+    END_IF;
 END_PROGRAM
