@@ -1,0 +1,24 @@
+(* Один скан, результаты точны в float. chain=64 (8 в квадрате, не 512),
+   signedBase=4, outside=-4, inverse=0.25, product=18.
+   root=3 (показатель 0.5 не усечён), odd=-8, unit=1, halfBase=0.25
+   (основание 1/2 адаптируется в REAL). expInt=3, expReal=0.5. intSquare=9, intRoot=2 проверяют
+   целое основание с целым и вещественным показателями. *)
+PROGRAM OpsPower
+VAR
+    expInt : INT := 3;
+    expReal : REAL := 0.5;
+    chain, signedBase, outside, inverse, product, root, odd, unit, halfBase : REAL;
+    intSquare, intRoot : REAL;
+END_VAR
+chain := 2 ** 3 ** 2;
+signedBase := -2 ** 2;
+outside := -(2 ** 2);
+inverse := 2 ** -2;
+product := 2 * 3 ** 2;
+root := 9.0 ** expReal;
+odd := (-2.0) ** expInt;
+unit := 0 ** 0;
+halfBase := (1 / 2) ** 2;
+intSquare := expInt ** 2;
+intRoot := (expInt + 1) ** expReal;
+END_PROGRAM
