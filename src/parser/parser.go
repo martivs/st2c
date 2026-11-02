@@ -267,6 +267,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseWhile()
 	case lexer.REPEAT:
 		return p.parseRepeat()
+	case lexer.RETURN:
+		return p.parseReturn()
 	case lexer.EXIT:
 		return p.parseExit()
 	default:
@@ -403,6 +405,12 @@ func (p *Parser) parseRepeat() ast.Statement {
 	p.expect(lexer.END_REPEAT)
 	p.optionalSemicolon()
 	return stmt
+}
+
+func (p *Parser) parseReturn() ast.Statement {
+	tok := p.expect(lexer.RETURN)
+	p.expect(lexer.SEMICOLON)
+	return &ast.ReturnStatement{Tok: tok}
 }
 
 // parseExit: EXIT ; — точка с запятой обязательна, как после любого простого

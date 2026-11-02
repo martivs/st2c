@@ -359,6 +359,9 @@ func (c *checker) checkStatement(s ast.Statement) {
 		c.checkStatements(st.Body)
 		c.loops--
 		c.checkCondition("UNTIL", st.Cond)
+	case *ast.ReturnStatement:
+		// Допустим во всех трёх POU. checkStatements продолжает обход тела.
+		return
 	case *ast.ExitStatement:
 		if c.loops == 0 {
 			c.errorf(st.Tok, "EXIT outside of a loop")

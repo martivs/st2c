@@ -69,6 +69,11 @@ func TestAllTokens(t *testing.T) {
 			},
 		},
 		{
+			name:  "return keyword and identifier",
+			input: "rEtUrN RETURNED",
+			want:  []expTok{{RETURN, "RETURN"}, {IDENT, "RETURNED"}, {EOF, ""}},
+		},
+		{
 			name:  "control-flow keywords",
 			input: "ELSIF WHILE END_WHILE REPEAT UNTIL END_REPEAT EXIT",
 			want: []expTok{

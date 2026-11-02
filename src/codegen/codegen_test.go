@@ -69,12 +69,14 @@ var goldenExamples = []string{
 	"ctrl_all",
 	"ops_arith",
 	"ops_power",
+	"ops_return",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
 // Смысл ФБ — состояние, переживающее скан, — виден только за несколько
 // сканов; значения по сканам выписаны в комментариях самих .st.
 var exampleScans = map[string]int{
+	"ops_return": 3,
 	"fb_counter": 3,
 	"fb_nested":  3,
 	"bool_all":   3,
@@ -183,10 +185,6 @@ func TestGCC(t *testing.T) {
 // Одноимённые POU и параметры занимают базовые имена и первый суффикс.
 // Условие WHILE пересчитывается, а правая часть OR с делением на ноль пропускается.
 func TestModInExpressions(t *testing.T) {
-	gcc, err := exec.LookPath("gcc")
-	if err != nil {
-		t.Skip("gcc не найден")
-	}
 	code := generateSource(t, `FUNCTION st2c_mod : INT
 VAR_INPUT st2c_mod1, st2c_lhs : INT; END_VAR
 VAR st2c_rhs : INT := st2c_mod1 MOD st2c_lhs; END_VAR
@@ -197,6 +195,55 @@ VAR x : INT := st2c_mod(17, 10) MOD (8 MOD 5); zero : INT; END_VAR
 WHILE x MOD 3 <> 0 DO x := x + 1; END_WHILE
 IF TRUE OR ((1 / zero) MOD 2 = 0) THEN x := x + 10; END_IF
 END_PROGRAM`, 1)
+	runGeneratedC(t, code, "x=13\nzero=0\n")
+}
+
+func TestReturnFromLoops(t *testing.T) {
+	code := generateSource(t, `FUNCTION Fraction : REAL
+VAR_INPUT early : BOOL; END_VAR
+VAR i : INT; END_VAR
+FOR i := 1 TO 2 DO
+ IF early THEN RETURN;
+ ELSIF i = 1 THEN Fraction := 1.5; RETURN;
+ END_IF;
+END_FOR;
+Fraction := 99.0;
+END_FUNCTION
+
+FUNCTION Flag : BOOL
+VAR_INPUT early : BOOL; END_VAR
+WHILE TRUE DO
+ IF early THEN RETURN; END_IF;
+ Flag := TRUE;
+ RETURN;
+END_WHILE;
+Flag := FALSE;
+END_FUNCTION
+
+FUNCTION Caller : REAL
+REPEAT
+ Caller := Fraction(FALSE) + 2.0;
+ RETURN;
+UNTIL TRUE END_REPEAT;
+Caller := 99.0;
+END_FUNCTION
+
+PROGRAM P
+VAR zero, value : REAL; off, on : BOOL; END_VAR
+zero := Fraction(TRUE);
+value := Caller();
+off := Flag(TRUE);
+on := Flag(FALSE);
+END_PROGRAM`, 1)
+	runGeneratedC(t, code, "zero=0\nvalue=3.5\noff=0\non=1\n")
+}
+
+func runGeneratedC(t *testing.T, code, want string) {
+	t.Helper()
+	gcc, err := exec.LookPath("gcc")
+	if err != nil {
+		t.Skip("gcc не найден")
+	}
 	dir := t.TempDir()
 	source, bin := filepath.Join(dir, "p.c"), filepath.Join(dir, "p")
 	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
@@ -207,8 +254,8 @@ END_PROGRAM`, 1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
-	if out, err := exec.CommandContext(ctx, bin).CombinedOutput(); err != nil || string(out) != "x=13\nzero=0\n" {
-		t.Fatalf("got %q (%v), want x=13 and zero=0", out, err)
+	if out, err := exec.CommandContext(ctx, bin).CombinedOutput(); err != nil || string(out) != want {
+		t.Fatalf("got %q (%v), want %q", out, err, want)
 	}
 }
 

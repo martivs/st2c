@@ -471,6 +471,7 @@ type gen struct {
 	deref     bool                 // true → обращение self->x (PROGRAM, позже ФБ); false → x (FUNCTION)
 	funcs     map[string]*funcInfo // функции файла (ключ ToUpper) — для эмиссии вызовов
 	info      *sema.Info           // side-table sema: типы выражений, вызванные builtins
+	retVar    *varInfo             // результат текущей FUNCTION, nil в теле PROGRAM/ФБ
 	forSeq    int
 	// loops — глубина вложенности циклов в точке эмиссии: EXIT при нуле дал бы
 	// break вне цикла. В отличие от sema, где checker новый на каждый POU, gen
@@ -640,6 +641,7 @@ func (g *gen) emitInit(info *stateInfo) error {
 // emitStep — функция шага: тело POU со состоянием (Name_step у PROGRAM,
 // Name_body у ФБ); переменные — поля struct, обращение через self->.
 func (g *gen) emitStep(info *stateInfo) error {
+	g.retVar = nil
 	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
 	g.linef("void %s_%s(%s *self) {", info.cName, info.stepName, info.cName)
 	defer g.bufferBody()()
@@ -660,6 +662,7 @@ func (g *gen) emitStep(info *stateInfo) error {
 // Инициализаторы VAR_INPUT игнорируются: значение параметра приходит от
 // вызывающего, все входы функции по sema обязательны (дефолты входов — долг).
 func (g *gen) emitFunction(info *funcInfo) error {
+	g.retVar = info.retVar
 	g.vars, g.deref, g.forSeq, g.loops = info.vars, false, 0, 0
 	sig, err := funcSignature(info)
 	if err != nil {
@@ -851,6 +854,14 @@ func (g *gen) stmt(s ast.Statement) error {
 			return err
 		}
 		g.linef("} while (!(%s));", cond)
+		return nil
+
+	case *ast.ReturnStatement:
+		if g.retVar == nil {
+			g.linef("return;")
+		} else {
+			g.linef("return %s;", g.retVar.cName)
+		}
 		return nil
 
 	case *ast.ExitStatement:

@@ -1,0 +1,91 @@
+Function(Pick : INT)
+  VarBlock(VAR_INPUT)
+    VarDecl(n : INT)
+  If
+    Cond:
+      Binary(=)
+        Ident(n)
+        Int(1)
+    Then:
+      Return
+  Assign
+    Target:
+      Ident(Pick)
+    Value:
+      Binary(*)
+        Ident(n)
+        Int(2)
+  Return
+  Assign
+    Target:
+      Ident(Pick)
+    Value:
+      Int(99)
+FunctionBlock(Meter)
+  VarBlock(VAR_INPUT)
+    VarDecl(shortStep : BOOL)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(count : INT)
+  Assign
+    Target:
+      Ident(count)
+    Value:
+      Binary(+)
+        Ident(count)
+        Int(1)
+  If
+    Cond:
+      Ident(shortStep)
+    Then:
+      Return
+  Assign
+    Target:
+      Ident(count)
+    Value:
+      Binary(+)
+        Ident(count)
+        Int(10)
+Program(OpsReturn)
+  VarBlock(VAR)
+    VarDecl(meterInst : Meter)
+    VarDecl(scan, picked, seen, tail : INT)
+  Assign
+    Target:
+      Ident(scan)
+    Value:
+      Binary(+)
+        Ident(scan)
+        Int(1)
+  Assign
+    Target:
+      Ident(picked)
+    Value:
+      Call
+        Callee:
+          Ident(Pick)
+        Arg
+          Ident(scan)
+  CallStmt
+    Call
+      Callee:
+        Ident(meterInst)
+      Arg(shortStep :=)
+        Binary(<>)
+          Ident(scan)
+          Int(2)
+      Arg(count =>)
+        Ident(seen)
+  If
+    Cond:
+      Binary(=)
+        Ident(scan)
+        Int(2)
+    Then:
+      Return
+  Assign
+    Target:
+      Ident(tail)
+    Value:
+      Binary(+)
+        Ident(tail)
+        Int(1)

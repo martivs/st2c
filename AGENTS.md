@@ -73,7 +73,7 @@ BOOL-выражения, им хватило того, что уже было с
 | 2.5  | `sema`    | готов    |
 | 3    | `codegen` | готов    |
 
-Все шестнадцать примеров из `examples/` проходят полную цепочку ST → C →
+Все семнадцать примеров из `examples/` проходят полную цепочку ST → C →
 `gcc -std=c99 -Wall -Wextra` → запуск с верными значениями: `vars_all` →
 result=119; `expr_all` → cmp=127; `name_clash` → total=82; `for_edge` →
 up=25 down=22 nested=10 edge=8 — и завершается (регрессия на бесконечный
@@ -118,6 +118,11 @@ outside=-4, inverse=0.25 и product=18. Адаптация основания п
 по halfBase=0.25, целое основание — по intSquare=9 и intRoot=2,
 вещественное основание-переменная — по realSquare=0.25.
 
+На этапе 4 `ops_return` проверяет три скана: scan=1/2/3, picked=0/4/6,
+seen=1/12/13, tail=1/1/2. Выход `count => seen` копируется и при раннем
+возврате из ФБ. На втором скане PROGRAM пропускает приращение tail,
+на третьем продолжает работу с сохранённым состоянием.
+
 ### Ограничения языка
 - Типы данных: скаляры `INT`, `REAL` и `BOOL`; любое другое имя типа обязано
   резолвиться в объявленный `FUNCTION_BLOCK` (переменная — экземпляр ФБ),
@@ -157,6 +162,12 @@ outside=-4, inverse=0.25 и product=18. Адаптация основания п
   `UNTIL` после тела. После `UNTIL c` точки с запятой **нет** (по грамматике
   IEC): `UNTIL c; END_REPEAT` — ошибка `expected END_REPEAT, got ;`. `;`
   после `END_WHILE`/`END_REPEAT` необязательна, как после `END_IF`/`END_FOR`
+- `RETURN;` завершает текущий вызов POU из любой ветви или цикла. Парсер
+  требует точку с запятой сразу после ключевого слова. В FUNCTION возвращается
+  текущее значение переменной результата (до присваивания — ноль своего типа).
+  В PROGRAM и ФБ генерируется `return;` из `_step` или `_body`. Вызывающий код
+  продолжает работу, в том числе выгрузку выходов ФБ. Sema проверяет и операторы
+  после `RETURN;`.
 - `EXIT;` выходит из **ближайшего** объемлющего цикла (`FOR`, `WHILE` или
   `REPEAT`); `EXIT` внутри `IF`/`ELSIF` внутри цикла законен — `IF` циклом не
   считается. `EXIT` вне цикла — ошибка sema `EXIT outside of a loop`
@@ -197,7 +208,7 @@ st2c/
 │                             # vars_all.st, expr_all.st, name_clash.st,
 │                             # for_edge.st, func_simple.st, fb_counter.st,
 │                             # fb_nested.st, real_all.st, bool_all.st,
-│                             # ctrl_all.st, ops_arith.st, ops_power.st — все проходят полную цепочку
+│                             # ctrl_all.st, ops_arith.st, ops_power.st, ops_return.st — все проходят полную цепочку
 └── src/
     ├── main.go               # CLI (пакет flag): -o, -main, -scans, -dump-ast
     ├── lexer/lexer.go        # + lexer_test.go (table-driven)
@@ -224,8 +235,8 @@ git-истории, а не в `main`.
 **`src/lexer/lexer.go`**
 - `TokenType` (iota): `EOF`, `ILLEGAL`, `IDENT`, `INT_LIT`, `REAL_LIT`,
   операторы (`+ - * ** / > < = <= >= <>`, `:=`, `=>` (`ARROW`), `&` (`AMP` —
-  синоним `AND`)), разделители (`: ; , ( )`, `.` (`DOT`)), 40 ключевых слов
-  (включая `MOD`, `BY`, семейство `VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT/VAR_TEMP`,
+  синоним `AND`)), разделители (`: ; , ( )`, `.` (`DOT`)), 41 ключевое слово
+  (включая `RETURN`, `MOD`, `BY`, семейство `VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT/VAR_TEMP`,
   квалификаторы `CONSTANT`/`RETAIN`, `FUNCTION`/`END_FUNCTION`,
   `FUNCTION_BLOCK`/`END_FUNCTION_BLOCK`, типы `INT`/`REAL`/`BOOL`, литералы
   `TRUE`/`FALSE`, логические `AND`/`OR`/`XOR`/`NOT`, управляющие `ELSIF`,
@@ -284,7 +295,7 @@ git-истории, а не в `main`.
   []Statement, Tok}` — **не** `Statement`: часть `IfStatement`, а не
   самостоятельный оператор (маркерного метода и `Line()` нет, как у `Arg`);
   `WhileStatement{Cond, Body, Tok}`; `RepeatStatement{Body, Cond, Tok}` —
-  поля в порядке исходника (тело, потом условие); `ExitStatement{Tok}`;
+  поля в порядке исходника (тело, потом условие); `ExitStatement{Tok}`; `ReturnStatement{Tok}`;
   `ForStatement`
   (`Var *Identifier`, `Step Expression`, nil → шаг 1); `CallStatement`
   (`Call *CallExpr` — вызов ФБ как оператор); `Identifier`; `IntLiteral`
@@ -327,7 +338,7 @@ git-истории, а не в `main`.
   (`WHILE expr DO {stmt} END_WHILE`), `parseRepeat`
   (`REPEAT {stmt} UNTIL expr END_REPEAT` — после условия **сразу**
   `expect(END_REPEAT)`, точка с запятой там не допускается), `parseExit`
-  (`EXIT ;` — `;` обязательна, как у любого простого оператора)
+  (`EXIT ;`), `parseReturn` (`RETURN ;`; точка с запятой обязательна для обоих)
 - `parseIf` между `Then` и `ELSE` — цикл по `ELSIF`: каждая ветка пополняет
   `ElsIfs`. `ELSIF` после `ELSE` отвергается сам собой: тело `ELSE`
   заканчивается на `ELSIF` (он в `isBlockEnd`), а `expect(END_IF)` даёт
@@ -454,7 +465,7 @@ git-истории, а не в `main`.
   Симметрия с `unsupported statement` у `codegen.stmt`: новый тип оператора,
   забытый в sema, иначе дошёл бы до codegen непроверенным. Тестом не
   покрывается — маркерный метод `statementNode()` неэкспортирован, чужой пакет
-  тип оператора подделать не может; страховка для будущих `CASE`/`RETURN`
+  тип оператора подделать не может; страховка для будущего `CASE`
 - **Встроенные конверсии** — таблица `builtins` (имя → типы параметров и
   результат): `INT_TO_REAL(Int) Real`, `REAL_TO_INT(Real) Int`. Резолв
   callee в `checkCall`: `pous` → `builtins` → `syms`; только позиционные
@@ -821,7 +832,7 @@ void Example_step(Example *self) {
     пиннит, что счётчик `loops` в общем `gen` не протекает между POU.
   - Внутренний `literal_test.go`: `cFloatLit` (правило `.0` перед `f`,
     экспонента у больших чисел) и `zeroLiteral` (INT/REAL/BOOL, регистр).
-  - Корпус — все шестнадцать примеров: `ops_power`, `ops_arith`, `vars_all`, `expr_all`,
+  - Корпус — все семнадцать примеров: `ops_return`, `ops_power`, `ops_arith`, `vars_all`, `expr_all`,
     `name_clash`, `example`, `nested_if_in_for`, `nested_for_in_if`,
     `deeply_nested`, `for_edge` (регрессия решения 6: без широкого счётчика
     зависает у границы `INT` — ловится таймаутом, а не сверкой числа),
@@ -1028,9 +1039,9 @@ void Example_step(Example *self) {
 
 Текущая работа над CASE, RETURN, MOD, ** и унарным плюсом описана в
 `PLAN_OPS.md` и `OPS_PROMPTS.md`. На этапе 1 зафиксированы контракты
-и подготовлены пять черновиков с ручными ожиданиями. Этапы 2 и 3 завершены.
-`examples/ops_arith.st` и `examples/ops_power.st` включены в тесты AST, C и GCC.
-Три оставшихся примера ждут своих этапов.
+и подготовлены пять черновиков с ручными ожиданиями. Этапы 2–4 завершены.
+`ops_arith.st`, `ops_power.st` и `ops_return.st` включены в тесты AST, C и GCC.
+`ops_case.st.draft` и `ops_all.st.draft` остаются черновиками.
 
 План 2026-08-07 (8 этапов: каркас codegen → `IF`/`FOR` → лексер/AST →
 парсер → sema функций → codegen функций → sema ФБ → codegen ФБ) закрыт
@@ -1046,8 +1057,8 @@ void Example_step(Example *self) {
   (`cTypes`/`cWideTypes`/`cZeros`/`cFormats`) поверх слоя типов; `TypeSpec`
   в AST (`ARRAY [1..10] OF INT` и т.п.; лексер уже разбирает `1..10` как
   `INT_LIT DOT DOT INT_LIT`).
-- **Операторы дальше**: `CASE / RETURN` — встают в `parseStatement` и
-  `isBlockEnd` независимо друг от друга. У `CASE` два отдельных вопроса, оба
+- **Операторы дальше**: `CASE` потребует дополнить `parseStatement` и
+  `isBlockEnd`. У `CASE` два отдельных вопроса, оба
   решаются в его плане: (1) `EXIT` внутри `CASE` — C-`switch` перехватывает
   `break`, поэтому `EXIT`, относящийся к циклу снаружи, идёт через **флаг
   выхода `__exitN`** (решение 7), `goto` не рассматривается; (2) **диапазоны

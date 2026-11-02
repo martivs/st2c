@@ -1,0 +1,12 @@
+scan=1
+picked=0
+seen=1
+tail=1
+scan=2
+picked=4
+seen=12
+tail=1
+scan=3
+picked=6
+seen=13
+tail=2

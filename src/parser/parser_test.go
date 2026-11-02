@@ -1293,6 +1293,16 @@ func TestParseErrors(t *testing.T) {
 			wantSubstr: `line 2: expected END_REPEAT, got ; ";"`,
 		},
 		{
+			name:       "RETURN без точки с запятой",
+			input:      "PROGRAM P\nRETURN END_PROGRAM",
+			wantSubstr: `line 2: expected ;, got END_PROGRAM`,
+		},
+		{
+			name:       "RETURN с выражением",
+			input:      "FUNCTION F : INT\nRETURN 1; END_FUNCTION",
+			wantSubstr: `line 2: expected ;, got INT_LIT "1"`,
+		},
+		{
 			name:       "EXIT без точки с запятой",
 			input:      "PROGRAM P\nWHILE a DO EXIT END_WHILE\nEND_PROGRAM",
 			wantSubstr: `line 2: expected ;, got END_WHILE "END_WHILE"`,

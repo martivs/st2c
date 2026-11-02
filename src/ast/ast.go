@@ -442,6 +442,15 @@ func (s *RepeatStatement) String() string {
 	return b.String()
 }
 
+// ReturnStatement завершает текущий вызов POU.
+type ReturnStatement struct {
+	Tok lexer.Token
+}
+
+func (s *ReturnStatement) statementNode() {}
+func (s *ReturnStatement) Line() int      { return s.Tok.Line }
+func (s *ReturnStatement) String() string { return "Return" }
+
 // ExitStatement — `EXIT;`: выход из ближайшего объемлющего цикла (FOR, WHILE
 // или REPEAT). IF циклом не считается, поэтому EXIT внутри IF внутри цикла
 // законен; EXIT вне цикла отвергает sema.

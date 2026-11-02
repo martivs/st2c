@@ -1670,3 +1670,10 @@ func TestPowerErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckAfterReturn(t *testing.T) {
+	errs := check(t, "PROGRAM P\nRETURN;\nmissing := 1;\nEND_PROGRAM")
+	if len(errs) != 1 || errs[0].Error() != `line 3:1: undeclared variable "missing"` {
+		t.Fatalf("errors after RETURN: %v", errs)
+	}
+}
