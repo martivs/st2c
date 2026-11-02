@@ -489,3 +489,10 @@ func TestColumns(t *testing.T) {
 		}
 	}
 }
+
+func TestPowerToken(t *testing.T) {
+	assertTokens(t, "*** (* ** *) *", []expTok{{POWER, "**"}, {STAR, "*"}, {STAR, "*"}, {EOF, ""}})
+	if POWER.String() != "**" {
+		t.Fatalf("power token prints as %q", POWER)
+	}
+}

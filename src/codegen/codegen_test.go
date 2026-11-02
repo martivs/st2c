@@ -68,6 +68,7 @@ var goldenExamples = []string{
 	"bool_all",
 	"ctrl_all",
 	"ops_arith",
+	"ops_power",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
@@ -147,8 +148,11 @@ func TestGCC(t *testing.T) {
 	for _, name := range goldenExamples {
 		t.Run(name, func(t *testing.T) {
 			bin := filepath.Join(t.TempDir(), name)
-			cmd := exec.Command(gcc, "-std=c99", "-Wall", "-Wextra", "-o", bin,
-				filepath.Join("testdata", name+".c"))
+			args := []string{"-std=c99", "-Wall", "-Wextra", "-o", bin, filepath.Join("testdata", name+".c")}
+			if name == "ops_power" {
+				args = append(args, "-lm")
+			}
+			cmd := exec.Command(gcc, args...)
 			if out, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("gcc: %v\n%s", err, out)
 			} else if len(out) > 0 {

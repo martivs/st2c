@@ -99,7 +99,18 @@ func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error)
 		names: occupiedNames(units), next: map[string]int{},
 	}
 	g.linef("#include <stdint.h>")
-	if opts.Main {
+	for e := range info.Types {
+		if bin, ok := e.(*ast.BinaryExpr); ok && bin.Op == ast.POWER {
+			g.protectPowerNames(units)
+			g.powHelper = g.freshName("st2c_pow")
+			break
+		}
+	}
+	if g.powHelper != "" {
+		g.linef("#include <math.h>")
+		g.linef("#include <stdlib.h>")
+	}
+	if opts.Main || g.powHelper != "" {
 		g.linef("#include <stdio.h>")
 	}
 	if err := g.emitHelpers(); err != nil {
@@ -177,6 +188,9 @@ func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error)
 	if g.modHelper != "" {
 		fmt.Fprintf(prologue, "\nstatic int16_t %s(int16_t lhs, int16_t rhs) {\n", g.modHelper)
 		prologue.WriteString("    return rhs == 0 ? 0 : (int32_t)lhs % (int32_t)rhs;\n}\n")
+	}
+	if g.powHelper != "" {
+		fmt.Fprintf(prologue, powerDefinition, g.powHelper)
 	}
 	return prologue.String() + g.b.String(), nil
 }
@@ -450,7 +464,8 @@ type gen struct {
 	names     map[string]bool
 	next      map[string]int
 	modHelper string
-	modTemps  []string
+	powHelper string
+	tempDecls []string
 	ind       int
 	vars      map[string]*varInfo  // таблица имён текущего POU
 	deref     bool                 // true → обращение self->x (PROGRAM, позже ФБ); false → x (FUNCTION)
@@ -510,10 +525,10 @@ func (g *gen) bufferBody() func() {
 	return func() {
 		body := g.b
 		g.b = out
-		for _, pair := range g.modTemps {
-			g.linef("    int16_t %s;", pair)
+		for _, decl := range g.tempDecls {
+			g.linef("    %s;", decl)
 		}
-		g.modTemps = nil
+		g.tempDecls = nil
 		g.b.WriteString(body.String())
 	}
 }
@@ -1060,14 +1075,22 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if e.Op == ast.MOD {
-			if g.modHelper == "" {
-				g.modHelper = g.freshName("st2c_mod")
+		if e.Op == ast.MOD || e.Op == ast.POWER {
+			helper, ct := g.powHelper, "float"
+			if e.Op == ast.MOD {
+				if g.modHelper == "" {
+					g.modHelper = g.freshName("st2c_mod")
+				}
+				helper, ct = g.modHelper, "int16_t"
+			} else if helper == "" {
+				return "", fmt.Errorf("line %d: codegen: ** requires type information", e.Line())
+			} else if g.info.Types[e.Left] == sema.Int {
+				left = "(float)" + left
 			}
 			lhs, rhs := g.freshName("st2c_lhs"), g.freshName("st2c_rhs")
-			g.modTemps = append(g.modTemps, lhs+", "+rhs)
+			g.tempDecls = append(g.tempDecls, ct+" "+lhs+", "+rhs)
 			// Запятые C99 задают порядок, в том числе под &&, || и в условиях циклов.
-			return fmt.Sprintf("(%s = %s, %s = %s, %s(%s, %s))", lhs, left, rhs, right, g.modHelper, lhs, rhs), nil
+			return fmt.Sprintf("(%s = %s, %s = %s, %s(%s, %s))", lhs, left, rhs, right, helper, lhs, rhs), nil
 		}
 		op, ok := cOps[e.Op]
 		if !ok {

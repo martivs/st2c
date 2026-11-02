@@ -444,6 +444,7 @@ var prec = map[lexer.TokenType]int{
 	lexer.LT: 5, lexer.GT: 5, lexer.LE: 5, lexer.GE: 5,
 	lexer.PLUS: 6, lexer.MINUS: 6,
 	lexer.STAR: 7, lexer.SLASH: 7, lexer.MOD: 7,
+	lexer.POWER: 8,
 }
 
 // lowestPrec — минимальный приоритет: parseExpression(lowestPrec) разбирает
@@ -455,7 +456,7 @@ const lowestPrec = 1
 // BOOL), обратная печать исходника — задача будущего форматтера.
 var binOps = map[lexer.TokenType]ast.Op{
 	lexer.PLUS: ast.ADD, lexer.MINUS: ast.SUB,
-	lexer.STAR: ast.MUL, lexer.SLASH: ast.DIV, lexer.MOD: ast.MOD,
+	lexer.STAR: ast.MUL, lexer.SLASH: ast.DIV, lexer.MOD: ast.MOD, lexer.POWER: ast.POWER,
 	lexer.LT: ast.LT, lexer.LE: ast.LE,
 	lexer.GT: ast.GT, lexer.GE: ast.GE,
 	lexer.EQ: ast.EQ, lexer.NE: ast.NE,

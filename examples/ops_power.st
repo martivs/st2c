@@ -8,7 +8,7 @@ VAR
     expInt : INT := 3;
     expReal : REAL := 0.5;
     chain, signedBase, outside, inverse, product, root, odd, unit, halfBase : REAL;
-    intSquare, intRoot : REAL;
+    intSquare, intRoot, realSquare : REAL;
 END_VAR
 chain := 2 ** 3 ** 2;
 signedBase := -2 ** 2;
@@ -21,4 +21,5 @@ unit := 0 ** 0;
 halfBase := (1 / 2) ** 2;
 intSquare := expInt ** 2;
 intRoot := (expInt + 1) ** expReal;
+realSquare := expReal ** 2; (* 0.5 в квадрате = 0.25 *)
 END_PROGRAM

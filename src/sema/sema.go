@@ -571,6 +571,19 @@ func (c *checker) inferBinary(ex *ast.BinaryExpr, want TypeKind) TypeKind {
 	if ex.Op == ast.MOD {
 		return c.inferFixedOperands(ex, Int)
 	}
+	if ex.Op == ast.POWER {
+		// Только основание из адаптивных литералов получает REAL-контекст.
+		lt := c.typeOf(ex.Left, Real)
+		rt := c.typeOf(ex.Right, Unknown)
+		if lt == Invalid || rt == Invalid {
+			return Invalid
+		}
+		if (lt != Int && lt != Real) || (rt != Int && rt != Real) {
+			c.errorf(ex.Tok, "operator %q requires numeric operands, got %s and %s", ex.Op, lt, rt)
+			return Invalid
+		}
+		return Real
+	}
 	cmp := isComparison(ex.Op)
 	w := c.hintOf(ex.Left)
 	if w == Unknown {
@@ -667,6 +680,9 @@ func (c *checker) hintOf(e ast.Expression) TypeKind {
 		}
 		return c.hintOf(ex.Operand)
 	case *ast.BinaryExpr:
+		if ex.Op == ast.POWER {
+			return Real
+		}
 		if ex.Op == ast.MOD {
 			return Int
 		}

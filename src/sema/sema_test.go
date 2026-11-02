@@ -1627,3 +1627,46 @@ func TestExamplesClean(t *testing.T) {
 		})
 	}
 }
+
+func TestPowerTypes(t *testing.T) {
+	for _, tc := range []struct {
+		expr           string
+		base, exponent sema.TypeKind
+	}{
+		{"i ** i", sema.Int, sema.Int}, {"i ** r", sema.Int, sema.Real},
+		{"r ** i", sema.Real, sema.Int}, {"r ** r", sema.Real, sema.Real},
+		{"(1 / 2) ** (1 / 2)", sema.Real, sema.Int},
+		{"(+32768) ** (1.0 / 2)", sema.Real, sema.Real},
+		{"(5 MOD 2) ** 32768.0", sema.Int, sema.Real},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			sf, info, errs := checkInfo(t, "PROGRAM P VAR i : INT; r : REAL; x : REAL := "+tc.expr+"; END_VAR END_PROGRAM")
+			if len(errs) != 0 {
+				t.Fatal(errs)
+			}
+			bin := sf.POUs[0].(*ast.Program).VarBlocks[0].Decls[2].Init.(*ast.BinaryExpr)
+			if info.Types[bin] != sema.Real || info.Types[bin.Left] != tc.base || info.Types[bin.Right] != tc.exponent {
+				t.Fatalf("result/base/exponent = %v/%v/%v", info.Types[bin], info.Types[bin.Left], info.Types[bin.Right])
+			}
+		})
+	}
+}
+
+func TestPowerErrors(t *testing.T) {
+	const prefix = "FUNCTION_BLOCK F END_FUNCTION_BLOCK PROGRAM P VAR inst : F; i : INT; r : REAL; END_VAR "
+	for _, tc := range []struct{ stmt, want string }{
+		{"r := TRUE ** 2;", "requires numeric operands"},
+		{"r := 2 ** FALSE;", "requires numeric operands"},
+		{"r := inst ** 2;", "cannot be used as a value"},
+		{"r := 2 ** inst;", "cannot be used as a value"},
+		{"i := 2 ** 3;", "cannot assign REAL"},
+		{"r := 2 ** 32768;", "literal 32768 out of range"},
+	} {
+		t.Run(tc.stmt, func(t *testing.T) {
+			errs := check(t, prefix+tc.stmt+" END_PROGRAM")
+			if len(errs) != 1 || !strings.Contains(errs[0].Error(), tc.want) {
+				t.Fatalf("got %v, want %q", errs, tc.want)
+			}
+		})
+	}
+}

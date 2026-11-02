@@ -18,6 +18,7 @@ const (
 	ASSIGN    // :=
 	PLUS      // +
 	MINUS     // -
+	POWER     // **
 	STAR      // *
 	SLASH     // /
 	GT        // >
@@ -84,7 +85,7 @@ const (
 var tokenNames = map[TokenType]string{
 	EOF: "EOF", ILLEGAL: "ILLEGAL",
 	IDENT: "IDENT", INT_LIT: "INT_LIT", REAL_LIT: "REAL_LIT",
-	ASSIGN: ":=", PLUS: "+", MINUS: "-", STAR: "*", SLASH: "/",
+	ASSIGN: ":=", PLUS: "+", MINUS: "-", STAR: "*", POWER: "**", SLASH: "/",
 	GT: ">", LT: "<", EQ: "=", LE: "<=", GE: ">=", NE: "<>",
 	COLON: ":", SEMICOLON: ";", COMMA: ",",
 	LPAREN: "(", RPAREN: ")",
@@ -193,6 +194,9 @@ func (l *Lexer) NextToken() Token {
 	case ch == '-':
 		l.pos++
 		return Token{Type: MINUS, Literal: "-", Line: line, Col: col}
+	case ch == '*' && l.peek() == '*':
+		l.pos += 2
+		return Token{Type: POWER, Literal: "**", Line: line, Col: col}
 	case ch == '*':
 		l.pos++
 		return Token{Type: STAR, Literal: "*", Line: line, Col: col}

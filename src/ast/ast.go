@@ -48,27 +48,28 @@ type Expression interface {
 type Op int
 
 const (
-	ADD Op = iota // +
-	SUB           // -
-	MUL           // *
-	DIV           // /
-	MOD           // MOD
-	LT            // <
-	LE            // <=
-	GT            // >
-	GE            // >=
-	EQ            // =
-	NE            // <>
-	AND           // AND (и синоним &)
-	OR            // OR
-	XOR           // XOR
-	NEG           // унарный минус
-	POS           // унарный плюс
-	NOT           // NOT
+	ADD   Op = iota // +
+	SUB             // -
+	MUL             // *
+	DIV             // /
+	POWER           // **
+	MOD             // MOD
+	LT              // <
+	LE              // <=
+	GT              // >
+	GE              // >=
+	EQ              // =
+	NE              // <>
+	AND             // AND (и синоним &)
+	OR              // OR
+	XOR             // XOR
+	NEG             // унарный минус
+	POS             // унарный плюс
+	NOT             // NOT
 )
 
 var opNames = map[Op]string{
-	ADD: "+", SUB: "-", MUL: "*", DIV: "/", MOD: "MOD",
+	ADD: "+", SUB: "-", MUL: "*", DIV: "/", MOD: "MOD", POWER: "**",
 	LT: "<", LE: "<=", GT: ">", GE: ">=", EQ: "=", NE: "<>",
 	AND: "AND", OR: "OR", XOR: "XOR",
 	NEG: "-", POS: "+", NOT: "NOT",
