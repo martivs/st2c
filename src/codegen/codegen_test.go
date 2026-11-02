@@ -67,6 +67,7 @@ var goldenExamples = []string{
 	"real_all",
 	"bool_all",
 	"ctrl_all",
+	"ops_arith",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
@@ -91,7 +92,16 @@ func generateExample(t *testing.T, name string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := parser.New(lexer.New(string(src)))
+	scans := exampleScans[name]
+	if scans == 0 {
+		scans = 1
+	}
+	return generateSource(t, string(src), scans)
+}
+
+func generateSource(t *testing.T, src string, scans int) string {
+	t.Helper()
+	p := parser.New(lexer.New(src))
 	sf, err := p.ParseSourceFile()
 	if err != nil {
 		t.Fatalf("parse error: %v", err)
@@ -99,10 +109,6 @@ func generateExample(t *testing.T, name string) string {
 	info, errs := sema.Check(sf)
 	if len(errs) > 0 {
 		t.Fatalf("sema errors: %v", errs)
-	}
-	scans := exampleScans[name]
-	if scans == 0 {
-		scans = 1
 	}
 	code, err := codegen.Generate(sf, info, codegen.Options{Main: true, Scans: scans})
 	if err != nil {
@@ -167,6 +173,38 @@ func TestGCC(t *testing.T) {
 				t.Errorf("вывод не совпал с %s.expected\n--- got ---\n%s--- want ---\n%s", name, got, want)
 			}
 		})
+	}
+}
+
+// Одноимённые POU и параметры занимают базовые имена и первый суффикс.
+// Условие WHILE пересчитывается, а правая часть OR с делением на ноль пропускается.
+func TestModInExpressions(t *testing.T) {
+	gcc, err := exec.LookPath("gcc")
+	if err != nil {
+		t.Skip("gcc не найден")
+	}
+	code := generateSource(t, `FUNCTION st2c_mod : INT
+VAR_INPUT st2c_mod1, st2c_lhs : INT; END_VAR
+VAR st2c_rhs : INT := st2c_mod1 MOD st2c_lhs; END_VAR
+st2c_mod := st2c_rhs;
+END_FUNCTION
+PROGRAM P
+VAR x : INT := st2c_mod(17, 10) MOD (8 MOD 5); zero : INT; END_VAR
+WHILE x MOD 3 <> 0 DO x := x + 1; END_WHILE
+IF TRUE OR ((1 / zero) MOD 2 = 0) THEN x := x + 10; END_IF
+END_PROGRAM`, 1)
+	dir := t.TempDir()
+	source, bin := filepath.Join(dir, "p.c"), filepath.Join(dir, "p")
+	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(gcc, "-std=c99", "-Wall", "-Wextra", source, "-o", bin).CombinedOutput(); err != nil {
+		t.Fatalf("gcc: %v\n%s", err, out)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
+	defer cancel()
+	if out, err := exec.CommandContext(ctx, bin).CombinedOutput(); err != nil || string(out) != "x=13\nzero=0\n" {
+		t.Fatalf("got %q (%v), want x=13 and zero=0", out, err)
 	}
 }
 

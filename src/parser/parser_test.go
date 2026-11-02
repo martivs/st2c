@@ -89,6 +89,21 @@ func TestExpressionStructure(t *testing.T) {
 		want string // String() значения присваивания, без завершающего \n
 	}{
 		{
+			name: "MOD на уровне умножения и деления, знаки сильнее",
+			expr: "20 / 2 MOD ++3 * +-1",
+			want: `Binary(*)
+  Binary(MOD)
+    Binary(/)
+      Int(20)
+      Int(2)
+    Unary(+)
+      Unary(+)
+        Int(3)
+  Unary(+)
+    Unary(-)
+      Int(1)`,
+		},
+		{
 			name: "левая ассоциативность вычитания",
 			expr: "a - b - c",
 			want: `Binary(-)

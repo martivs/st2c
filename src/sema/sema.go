@@ -535,7 +535,11 @@ func (c *checker) infer(e ast.Expression, want TypeKind) TypeKind {
 		}
 		t := c.typeOf(ex.Operand, want)
 		if t == Bool {
-			c.errorf(ex.Tok, "unary minus is not applicable to BOOL")
+			sign := "minus"
+			if ex.Op == ast.POS {
+				sign = "plus"
+			}
+			c.errorf(ex.Tok, "unary %s is not applicable to BOOL", sign)
 			return Invalid
 		}
 		return t
@@ -551,7 +555,7 @@ func (c *checker) infer(e ast.Expression, want TypeKind) TypeKind {
 }
 
 // inferBinary разводит три класса операций: логическая (isLogical —
-// inferLogical), сравнение (isComparison) и арифметика. Для сравнения и
+// inferFixedOperands), сравнение (isComparison) и арифметика. Для сравнения и
 // арифметики операнды одного типа; арифметика возвращает его же, сравнение
 // — BOOL. Контекст операндов — подсказка hintOf от операнда с известным
 // типом (так `IF 1 > r` и `IF r > 1` симметричны, а в `i + 1` литерал не
@@ -562,7 +566,10 @@ func (c *checker) infer(e ast.Expression, want TypeKind) TypeKind {
 // диагностику ловушки `a < b < c` (это `(a < b) < c`, левый операнд — BOOL).
 func (c *checker) inferBinary(ex *ast.BinaryExpr, want TypeKind) TypeKind {
 	if isLogical(ex.Op) {
-		return c.inferLogical(ex)
+		return c.inferFixedOperands(ex, Bool)
+	}
+	if ex.Op == ast.MOD {
+		return c.inferFixedOperands(ex, Int)
 	}
 	cmp := isComparison(ex.Op)
 	w := c.hintOf(ex.Left)
@@ -598,20 +605,18 @@ func (c *checker) inferBinary(ex *ast.BinaryExpr, want TypeKind) TypeKind {
 	return lt
 }
 
-// inferLogical — AND/OR/XOR: контекст обоих операндов всегда BOOL (подсказка
-// соседа не нужна — операция определена только над BOOL), оба обязаны быть
-// BOOL, результат BOOL. Invalid у операнда — ошибка уже выдана, каскада нет.
-func (c *checker) inferLogical(ex *ast.BinaryExpr) TypeKind {
-	lt := c.typeOf(ex.Left, Bool)
-	rt := c.typeOf(ex.Right, Bool)
+// MOD и логические операции задают тип обоих операндов и результата.
+func (c *checker) inferFixedOperands(ex *ast.BinaryExpr, kind TypeKind) TypeKind {
+	lt := c.typeOf(ex.Left, kind)
+	rt := c.typeOf(ex.Right, kind)
 	if lt == Invalid || rt == Invalid {
 		return Invalid
 	}
-	if lt != Bool || rt != Bool {
-		c.errorf(ex.Tok, "operator %q requires BOOL operands, got %s and %s", ex.Op, lt, rt)
+	if lt != kind || rt != kind {
+		c.errorf(ex.Tok, "operator %q requires %s operands, got %s and %s", ex.Op, kind, lt, rt)
 		return Invalid
 	}
-	return Bool
+	return kind
 }
 
 // isLogical — AND (в том числе синоним `&`), OR, XOR: только над BOOL.
@@ -662,6 +667,9 @@ func (c *checker) hintOf(e ast.Expression) TypeKind {
 		}
 		return c.hintOf(ex.Operand)
 	case *ast.BinaryExpr:
+		if ex.Op == ast.MOD {
+			return Int
+		}
 		if isComparison(ex.Op) || isLogical(ex.Op) {
 			return Bool
 		}

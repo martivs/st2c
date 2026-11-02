@@ -52,6 +52,7 @@ const (
 	SUB           // -
 	MUL           // *
 	DIV           // /
+	MOD           // MOD
 	LT            // <
 	LE            // <=
 	GT            // >
@@ -62,14 +63,15 @@ const (
 	OR            // OR
 	XOR           // XOR
 	NEG           // унарный минус
+	POS           // унарный плюс
 	NOT           // NOT
 )
 
 var opNames = map[Op]string{
-	ADD: "+", SUB: "-", MUL: "*", DIV: "/",
+	ADD: "+", SUB: "-", MUL: "*", DIV: "/", MOD: "MOD",
 	LT: "<", LE: "<=", GT: ">", GE: ">=", EQ: "=", NE: "<>",
 	AND: "AND", OR: "OR", XOR: "XOR",
-	NEG: "-", NOT: "NOT",
+	NEG: "-", POS: "+", NOT: "NOT",
 }
 
 // String возвращает исходное написание операции: символ (`+`, `<=`, …) либо
@@ -540,8 +542,7 @@ func (e *BinaryExpr) String() string {
 	return b.String()
 }
 
-// UnaryExpr — унарная операция: `-x` (NEG) и `NOT b` (NOT). Унарный `+`
-// ляжет в этот же узел.
+// UnaryExpr — унарная операция: `-x` (NEG), `+x` (POS) или `NOT b` (NOT).
 type UnaryExpr struct {
 	Op      Op
 	Operand Expression

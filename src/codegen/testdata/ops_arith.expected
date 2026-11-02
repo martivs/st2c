@@ -1,0 +1,12 @@
+pp=1
+np=-1
+pn=1
+nn=-1
+chain=6
+small=2
+exact=0
+edge=0
+zero=0
+dynamicZero=0
+signs=-32768
+adapted=0.5

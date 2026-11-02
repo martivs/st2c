@@ -756,6 +756,35 @@ END_PROGRAM`,
 	}
 }
 
+func TestModAndUnaryPlus(t *testing.T) {
+	for _, tc := range []struct{ stmt, want string }{
+		{"i := r MOD 1;", "requires INT operands, got REAL and INT"},
+		{"i := 1 MOD r;", "requires INT operands, got INT and REAL"},
+		{"i := TRUE MOD 1;", "requires INT operands, got BOOL and INT"},
+		{"i := 1 MOD FALSE;", "requires INT operands, got INT and BOOL"},
+		{"r := 5 MOD 2;", "cannot assign INT"},
+		{"r := 1 / 2 + (5 MOD 2);", "cannot assign INT"},
+		{"r := +i;", "cannot assign INT"},
+		{"i := +r;", "cannot assign REAL"},
+		{"i := +TRUE;", "unary plus is not applicable to BOOL"},
+		{"i := +32768;", "literal 32768 out of range"},
+		{"i := -( +32768 );", "literal 32768 out of range"},
+		{"i := +(-32769);", "literal -32769 out of range"},
+		{"i := +32767; i := +(-32768); i := ++i; i := -+1;", ""},
+		{"r := +32768; r := +r; r := +1 / 2;", ""},
+	} {
+		t.Run(tc.stmt, func(t *testing.T) {
+			errs := check(t, "PROGRAM P VAR i : INT; r : REAL; END_VAR "+tc.stmt+" END_PROGRAM")
+			if tc.want == "" && len(errs) == 0 {
+				return
+			}
+			if tc.want == "" || len(errs) != 1 || !strings.Contains(errs[0].Error(), tc.want) {
+				t.Fatalf("got %v, want %q", errs, tc.want)
+			}
+		})
+	}
+}
+
 // TestReal — этап 4 плана REAL: дополняет TestTypes (не дублирует) кейсами
 // в контекстах, которых там нет: тела FUNCTION и FUNCTION_BLOCK, члены
 // экземпляров, вызовы функций в условии и в операндах, литералы под знаком и

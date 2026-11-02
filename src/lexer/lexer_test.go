@@ -401,6 +401,7 @@ func TestAllTokens(t *testing.T) {
 // TestKeywordsCaseInsensitive: ключевые слова регистронезависимы, литерал
 // приводится к верхнему регистру; идентификаторы сохраняют написание.
 func TestKeywordsCaseInsensitive(t *testing.T) {
+	assertTokens(t, "mOd MODEL mod1", []expTok{{MOD, "MOD"}, {IDENT, "MODEL"}, {IDENT, "mod1"}, {EOF, ""}})
 	assertTokens(t, "program If eNd_If foR Sum", []expTok{
 		{PROGRAM, "PROGRAM"}, {IF, "IF"}, {END_IF, "END_IF"}, {FOR, "FOR"},
 		{IDENT, "Sum"},

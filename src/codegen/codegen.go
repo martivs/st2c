@@ -94,7 +94,10 @@ func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error)
 		return "", fmt.Errorf("codegen: -main requires a PROGRAM in the source file")
 	}
 
-	g := &gen{funcs: funcs, info: info}
+	g := &gen{
+		b: new(strings.Builder), funcs: funcs, info: info,
+		names: occupiedNames(units), next: map[string]int{},
+	}
 	g.linef("#include <stdint.h>")
 	if opts.Main {
 		g.linef("#include <stdio.h>")
@@ -102,6 +105,9 @@ func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error)
 	if err := g.emitHelpers(); err != nil {
 		return "", err
 	}
+
+	prologue := g.b
+	g.b = new(strings.Builder)
 
 	// Два прохода (решение 5): сначала все typedef и прототипы, потом все
 	// тела — порядок POU в исходнике и взаимные ссылки перестают иметь
@@ -168,7 +174,11 @@ func Generate(sf *ast.SourceFile, info *sema.Info, opts Options) (string, error)
 			return "", err
 		}
 	}
-	return g.b.String(), nil
+	if g.modHelper != "" {
+		fmt.Fprintf(prologue, "\nstatic int16_t %s(int16_t lhs, int16_t rhs) {\n", g.modHelper)
+		prologue.WriteString("    return rhs == 0 ? 0 : (int32_t)lhs % (int32_t)rhs;\n}\n")
+	}
+	return prologue.String() + g.b.String(), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -436,18 +446,76 @@ func funcSignature(info *funcInfo) (string, error) {
 // временных FOR (уникальность при вложенности) и глубина циклов (защита для
 // EXIT).
 type gen struct {
-	b      strings.Builder
-	ind    int
-	vars   map[string]*varInfo  // таблица имён текущего POU
-	deref  bool                 // true → обращение self->x (PROGRAM, позже ФБ); false → x (FUNCTION)
-	funcs  map[string]*funcInfo // функции файла (ключ ToUpper) — для эмиссии вызовов
-	info   *sema.Info           // side-table sema: типы выражений, вызванные builtins
-	forSeq int
+	b         *strings.Builder
+	names     map[string]bool
+	next      map[string]int
+	modHelper string
+	modTemps  []string
+	ind       int
+	vars      map[string]*varInfo  // таблица имён текущего POU
+	deref     bool                 // true → обращение self->x (PROGRAM, позже ФБ); false → x (FUNCTION)
+	funcs     map[string]*funcInfo // функции файла (ключ ToUpper) — для эмиссии вызовов
+	info      *sema.Info           // side-table sema: типы выражений, вызванные builtins
+	forSeq    int
 	// loops — глубина вложенности циклов в точке эмиссии: EXIT при нуле дал бы
 	// break вне цикла. В отличие от sema, где checker новый на каждый POU, gen
 	// один на весь файл, поэтому loops сбрасывается вместе с forSeq в
 	// emitInit/emitStep/emitFunction.
 	loops int
+}
+
+// Новые служебные имена не должны затенять пользовательские и наоборот.
+// Прежние временные FOR начинаются с __ и не пересекаются с префиксом st2c_.
+func occupiedNames(units []unit) map[string]bool {
+	names := map[string]bool{}
+	for _, u := range units {
+		if u.fn != nil {
+			names[u.fn.cName] = true
+			for _, v := range u.fn.vars {
+				names[v.cName] = true
+			}
+		} else {
+			s := u.state
+			names[s.cName] = true
+			names[s.cName+"_init"] = true
+			names[s.cName+"_"+s.stepName] = true
+			for _, v := range s.order {
+				names[v.cName] = true
+			}
+		}
+	}
+	return names
+}
+
+func (g *gen) freshName(base string) string {
+	for {
+		n := g.next[base]
+		g.next[base]++
+		name := base
+		if n > 0 {
+			name += strconv.Itoa(n)
+		}
+		if !g.names[name] {
+			g.names[name] = true
+			return name
+		}
+	}
+}
+
+// Объявления временных нужны в начале функции, но обнаруживаются при
+// генерации выражений. Сами присваивания остаются на месте операции.
+func (g *gen) bufferBody() func() {
+	out := g.b
+	g.b = new(strings.Builder)
+	return func() {
+		body := g.b
+		g.b = out
+		for _, pair := range g.modTemps {
+			g.linef("    int16_t %s;", pair)
+		}
+		g.modTemps = nil
+		g.b.WriteString(body.String())
+	}
 }
 
 // realToIntHelper — имя static-хелпера округления для REAL_TO_INT; занесено
@@ -492,7 +560,7 @@ func (g *gen) ref(vi *varInfo) string {
 
 func (g *gen) linef(format string, args ...any) {
 	g.b.WriteString(strings.Repeat("    ", g.ind))
-	fmt.Fprintf(&g.b, format, args...)
+	fmt.Fprintf(g.b, format, args...)
 	g.b.WriteByte('\n')
 }
 
@@ -527,6 +595,7 @@ func (g *gen) emitTypedef(info *stateInfo) error {
 func (g *gen) emitInit(info *stateInfo) error {
 	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
 	g.linef("void %s_init(%s *self) {", info.cName, info.cName)
+	defer g.bufferBody()()
 	g.ind++
 	for _, blk := range info.blocks {
 		for _, d := range blk.Decls {
@@ -558,6 +627,7 @@ func (g *gen) emitInit(info *stateInfo) error {
 func (g *gen) emitStep(info *stateInfo) error {
 	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
 	g.linef("void %s_%s(%s *self) {", info.cName, info.stepName, info.cName)
+	defer g.bufferBody()()
 	g.ind++
 	if err := g.stmts(info.body); err != nil {
 		return err
@@ -581,6 +651,7 @@ func (g *gen) emitFunction(info *funcInfo) error {
 		return err
 	}
 	g.linef("%s {", sig)
+	defer g.bufferBody()()
 	g.ind++
 	ret, err := cType(info.retVar.stType, info.retVar.tok)
 	if err != nil {
@@ -942,9 +1013,9 @@ var cOps = map[ast.Op]string{
 	ast.AND: "&&", ast.OR: "||", ast.XOR: "!=",
 }
 
-// cUnaryOps — таблица унарных операций: NEG → -, NOT → !.
+// cUnaryOps — таблица унарных операций: NEG → -, POS → +, NOT → !.
 var cUnaryOps = map[ast.Op]string{
-	ast.NEG: "-", ast.NOT: "!",
+	ast.NEG: "-", ast.POS: "+", ast.NOT: "!",
 }
 
 // expr возвращает C-текст выражения. Каждая бинарная и унарная операция — в
@@ -988,6 +1059,15 @@ func (g *gen) expr(e ast.Expression) (string, error) {
 		right, err := g.expr(e.Right)
 		if err != nil {
 			return "", err
+		}
+		if e.Op == ast.MOD {
+			if g.modHelper == "" {
+				g.modHelper = g.freshName("st2c_mod")
+			}
+			lhs, rhs := g.freshName("st2c_lhs"), g.freshName("st2c_rhs")
+			g.modTemps = append(g.modTemps, lhs+", "+rhs)
+			// Запятые C99 задают порядок, в том числе под &&, || и в условиях циклов.
+			return fmt.Sprintf("(%s = %s, %s = %s, %s(%s, %s))", lhs, left, rhs, right, g.modHelper, lhs, rhs), nil
 		}
 		op, ok := cOps[e.Op]
 		if !ok {

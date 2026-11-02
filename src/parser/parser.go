@@ -427,7 +427,7 @@ func (p *Parser) optionalSemicolon() {
 // Одна функция parseExpression(minPrec) + таблица приоритетов prec. Уровни —
 // по IEC 61131-3, от слабого к сильному: OR, XOR, AND (и синоним &),
 // сравнение (= <>), отношения (< > <= >=), аддитивные, мультипликативные,
-// унарные (-, NOT), атомы с постфиксами. Новый бинарный оператор = по одной
+// унарные (+, -, NOT), атомы с постфиксами. Новый бинарный оператор = по одной
 // строке в prec и binOps, унарный — строка в unaryOps.
 // ---------------------------------------------------------------------------
 
@@ -443,7 +443,7 @@ var prec = map[lexer.TokenType]int{
 	lexer.EQ: 4, lexer.NE: 4,
 	lexer.LT: 5, lexer.GT: 5, lexer.LE: 5, lexer.GE: 5,
 	lexer.PLUS: 6, lexer.MINUS: 6,
-	lexer.STAR: 7, lexer.SLASH: 7,
+	lexer.STAR: 7, lexer.SLASH: 7, lexer.MOD: 7,
 }
 
 // lowestPrec — минимальный приоритет: parseExpression(lowestPrec) разбирает
@@ -455,7 +455,7 @@ const lowestPrec = 1
 // BOOL), обратная печать исходника — задача будущего форматтера.
 var binOps = map[lexer.TokenType]ast.Op{
 	lexer.PLUS: ast.ADD, lexer.MINUS: ast.SUB,
-	lexer.STAR: ast.MUL, lexer.SLASH: ast.DIV,
+	lexer.STAR: ast.MUL, lexer.SLASH: ast.DIV, lexer.MOD: ast.MOD,
 	lexer.LT: ast.LT, lexer.LE: ast.LE,
 	lexer.GT: ast.GT, lexer.GE: ast.GE,
 	lexer.EQ: ast.EQ, lexer.NE: ast.NE,
@@ -465,8 +465,8 @@ var binOps = map[lexer.TokenType]ast.Op{
 
 // unaryOps — перевод токена унарного оператора в операцию AST.
 var unaryOps = map[lexer.TokenType]ast.Op{
-	lexer.MINUS: ast.NEG,
-	lexer.NOT:   ast.NOT,
+	lexer.PLUS: ast.POS, lexer.MINUS: ast.NEG,
+	lexer.NOT: ast.NOT,
 }
 
 // parseExpression разбирает выражение, состоящее из операторов с приоритетом

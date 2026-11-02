@@ -74,6 +74,7 @@ const (
 	OR
 	XOR
 	NOT
+	MOD
 )
 
 // tokenNames — имена типов токенов для печати. Ключевые слова сюда не
@@ -110,7 +111,7 @@ var keywords = map[string]TokenType{
 	"CONSTANT": CONSTANT, "RETAIN": RETAIN,
 	"INT": INT, "REAL": REAL, "BOOL": BOOL,
 	"TRUE": TRUE, "FALSE": FALSE,
-	"AND": AND, "OR": OR, "XOR": XOR, "NOT": NOT,
+	"AND": AND, "OR": OR, "XOR": XOR, "NOT": NOT, "MOD": MOD,
 	"IF": IF, "THEN": THEN, "ELSIF": ELSIF, "ELSE": ELSE, "END_IF": END_IF,
 	"FOR": FOR, "TO": TO, "BY": BY, "DO": DO, "END_FOR": END_FOR,
 	// WHILE переиспользует DO от FOR; EXIT относится к любому из трёх циклов.
