@@ -1678,9 +1678,92 @@ func TestCheckAfterReturn(t *testing.T) {
 	}
 }
 
-func TestCaseNotSupported(t *testing.T) {
-	errs := check(t, "PROGRAM P\nIF TRUE THEN\n  CASE 1 OF 1: END_CASE\nEND_IF\nEND_PROGRAM")
-	if len(errs) != 1 || errs[0].Error() != "line 3:3: CASE is not supported yet" {
-		t.Fatalf("errors: %v", errs)
+func TestCaseDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       []string
+	}{
+		{"REAL selector", "CASE 1.5 OF 0: END_CASE", []string{"line 2:6: CASE selector must be INT, got REAL"}},
+		{"BOOL selector", "CASE TRUE OF 0: END_CASE", []string{"line 2:6: CASE selector must be INT, got BOOL"}},
+		{"bounds", `CASE 1 OF
+ -32769..+32768, 32768, 999999999999999999999999: EXIT;
+ 2..1, 0: RETURN;
+ ELSE EXIT;
+END_CASE`, []string{
+			"line 3:2: CASE label -32769 out of range for INT (-32768..32767)",
+			"line 3:10: CASE label +32768 out of range for INT (-32768..32767)",
+			"line 3:18: CASE label 32768 out of range for INT (-32768..32767)",
+			"line 3:25: CASE label 999999999999999999999999 out of range for INT (-32768..32767)",
+			"line 3:51: EXIT outside of a loop",
+			"line 4:2: reversed CASE range 2..1",
+			"line 5:7: EXIT outside of a loop",
+		}},
+		{"conflicts in source order", `CASE missing OF
+ -2, -02: RETURN; x := 0;
+ 1..3, 2: y := 1;
+ 3..5, 5..8:
+ -10..10:
+ ELSE z := 2;
+END_CASE`, []string{
+			`line 2:6: undeclared variable "missing"`,
+			"line 3:6: CASE label overlaps previous label at line 3:2",
+			`line 3:19: undeclared variable "x"`,
+			"line 4:8: CASE label overlaps previous label at line 4:2",
+			`line 4:11: undeclared variable "y"`,
+			"line 5:2: CASE label overlaps previous label at line 4:2",
+			"line 6:2: CASE label overlaps previous label at line 3:2",
+			`line 7:7: undeclared variable "z"`,
+		}},
+		{"overlapping ranges", "CASE 0 OF 1..3, 2..4: END_CASE", []string{
+			"line 2:17: CASE label overlaps previous label at line 2:11",
+		}},
+		{"discard invalid intervals", "CASE 1 OF 1, 0..32768, -32769..2, 2: END_CASE", []string{
+			"line 2:17: CASE label 32768 out of range for INT (-32768..32767)",
+			"line 2:24: CASE label -32769 out of range for INT (-32768..32767)",
+		}},
+		{"independent cases and adjacent intervals", `CASE -32768 OF
+ -32768..-1, 0..+32767: CASE 0 OF -32768..32767: END_CASE
+END_CASE
+CASE 0 OF -32768..32767: END_CASE`, nil},
+		{"loop depth restored", `CASE 0 OF
+ 0: WHILE TRUE DO EXIT; END_WHILE
+    EXIT;
+END_CASE`, []string{"line 4:5: EXIT outside of a loop"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			errs := check(t, "PROGRAM P\n"+tc.body+"\nEND_PROGRAM")
+			if len(errs) != len(tc.want) {
+				t.Fatalf("got %v, want %v", errs, tc.want)
+			}
+			for i, err := range errs {
+				if err.Error() != tc.want[i] {
+					t.Errorf("error %d: got %q, want %q", i, err, tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestCaseContext(t *testing.T) {
+	sf, info, errs := checkInfo(t, `FUNCTION F : INT
+CASE 1 OF 0: RETURN; ELSE F := 2; RETURN; END_CASE
+END_FUNCTION
+FUNCTION_BLOCK B
+VAR_OUTPUT n : INT; END_VAR
+CASE n OF 1: RETURN; END_CASE
+END_FUNCTION_BLOCK
+PROGRAM P
+VAR i : INT; inst : B; END_VAR
+FOR i := 1 TO 2 DO CASE inst.n OF 0: EXIT; END_CASE END_FOR
+WHILE TRUE DO CASE F() OF 0: CASE i OF 1: EXIT; END_CASE END_CASE END_WHILE
+REPEAT CASE i OF 1: WHILE TRUE DO EXIT; END_WHILE ELSE EXIT; END_CASE UNTIL TRUE END_REPEAT
+CASE 1 + 2 OF 3: RETURN; END_CASE
+END_PROGRAM`)
+	if len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	st := sf.POUs[2].(*ast.Program).Body[3].(*ast.CaseStatement)
+	if got := info.Types[st.Selector]; got != sema.Int {
+		t.Errorf("selector type = %s, want INT", got)
 	}
 }

@@ -259,6 +259,30 @@ func runGeneratedC(t *testing.T, code, want string) {
 	}
 }
 
+// Черновики CASE уже проходят Check, но Generate обязан вернуть ошибку без C.
+func TestCaseDrafts(t *testing.T) {
+	for _, name := range []string{"ops_case", "ops_all"} {
+		t.Run(name, func(t *testing.T) {
+			src, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".st.draft"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			sf, err := parser.New(lexer.New(string(src))).ParseSourceFile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			info, errs := sema.Check(sf)
+			if len(errs) != 0 {
+				t.Fatalf("Check: %v", errs)
+			}
+			code, err := codegen.Generate(sf, info, codegen.Options{})
+			if code != "" || err == nil || !strings.Contains(err.Error(), "codegen: CASE is not supported yet") {
+				t.Fatalf("Generate: code = %q, err = %v", code, err)
+			}
+		})
+	}
+}
+
 // TestNameErrors: отказы маппера имён (решение 8) — то, что фронтенд
 // пропускает молча, codegen обязан отвергнуть внятной ошибкой с позицией.
 func TestNameErrors(t *testing.T) {

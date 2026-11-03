@@ -30,6 +30,7 @@ package sema
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 
 	"st2c/src/ast"
@@ -360,7 +361,7 @@ func (c *checker) checkStatement(s ast.Statement) {
 		c.loops--
 		c.checkCondition("UNTIL", st.Cond)
 	case *ast.CaseStatement:
-		c.errorf(st.Tok, "CASE is not supported yet")
+		c.checkCase(st)
 	case *ast.ReturnStatement:
 		// Допустим во всех трёх POU. checkStatements продолжает обход тела.
 		return
@@ -377,6 +378,57 @@ func (c *checker) checkStatement(s ast.Statement) {
 		// (unsupported statement), у sema она появилась этапом CTRL.
 		c.errs = append(c.errs, fmt.Errorf("line %d: sema: internal: unhandled statement %T", s.Line(), s))
 	}
+}
+
+type caseInterval struct {
+	low, high int64
+	tok       lexer.Token
+}
+
+func (c *checker) checkCase(st *ast.CaseStatement) {
+	if t := c.typeOf(st.Selector, Int); t != Invalid && t != Int {
+		c.errorf(exprTok(st.Selector), "CASE selector must be INT, got %s", t)
+	}
+	var accepted []caseInterval
+	for _, branch := range st.Branches {
+		for _, label := range branch.Labels {
+			if interval, ok := c.checkCaseLabel(label, accepted); ok {
+				accepted = append(accepted, interval)
+			}
+		}
+		c.checkStatements(branch.Body)
+	}
+	c.checkStatements(st.Else)
+}
+
+func (c *checker) caseBound(bound ast.CaseBound) (int64, bool) {
+	value, err := strconv.ParseInt(bound.Text, 10, 16)
+	if err != nil {
+		c.errorf(bound.Tok, "CASE label %s out of range for INT (%d..%d)", bound.Text, intMin, intMax)
+	}
+	return value, err == nil
+}
+
+func (c *checker) checkCaseLabel(label ast.CaseLabel, accepted []caseInterval) (caseInterval, bool) {
+	low, lowOK := c.caseBound(label.Low)
+	high, highOK := low, lowOK
+	if label.High != nil {
+		high, highOK = c.caseBound(*label.High)
+	}
+	if !lowOK || !highOK {
+		return caseInterval{}, false
+	}
+	if low > high {
+		c.errorf(label.Low.Tok, "reversed CASE range %d..%d", low, high)
+		return caseInterval{}, false
+	}
+	for _, prev := range accepted {
+		if low <= prev.high && prev.low <= high {
+			c.errorf(label.Low.Tok, "CASE label overlaps previous label at line %d:%d", prev.tok.Line, prev.tok.Col)
+			return caseInterval{}, false
+		}
+	}
+	return caseInterval{low: low, high: high, tok: label.Low.Tok}, true
 }
 
 // checkCondition — условие IF, ELSIF, WHILE и UNTIL: любое выражение типа
