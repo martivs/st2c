@@ -274,6 +274,12 @@ func TestNameErrors(t *testing.T) {
 			wantSubstr: "line 3:1: codegen: identifier \"переменная\" is not representable in C",
 		},
 		{
+			name:       "CASE при обходе sema",
+			src:        "PROGRAM P\nCASE 1 OF 1: END_CASE\nEND_PROGRAM",
+			wantSubstr: "line 2: codegen: CASE is not supported yet",
+			skipSema:   true,
+		},
+		{
 			name:       "склейка после префиксации",
 			src:        "PROGRAM P\nVAR\nst_switch : INT;\nswitch : INT;\nEND_VAR\nEND_PROGRAM",
 			wantSubstr: `line 4:1: codegen: renamed "switch" collides with "st_switch"`,

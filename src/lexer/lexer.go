@@ -54,6 +54,9 @@ const (
 	ELSIF
 	ELSE
 	END_IF
+	CASE
+	OF
+	END_CASE
 	FOR
 	TO
 	BY
@@ -115,6 +118,7 @@ var keywords = map[string]TokenType{
 	"TRUE": TRUE, "FALSE": FALSE,
 	"AND": AND, "OR": OR, "XOR": XOR, "NOT": NOT, "MOD": MOD,
 	"IF": IF, "THEN": THEN, "ELSIF": ELSIF, "ELSE": ELSE, "END_IF": END_IF,
+	"CASE": CASE, "OF": OF, "END_CASE": END_CASE,
 	"FOR": FOR, "TO": TO, "BY": BY, "DO": DO, "END_FOR": END_FOR,
 	// WHILE переиспользует DO от FOR; EXIT относится к любому из трёх циклов.
 	"WHILE": WHILE, "END_WHILE": END_WHILE,

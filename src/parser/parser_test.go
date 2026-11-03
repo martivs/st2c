@@ -1333,3 +1333,98 @@ func TestParseErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestCase(t *testing.T) {
+	prog := parseOneProgram(t, `PROGRAM P
+CASE inst.Out OF
+  -32768..-1, +0:
+  1..5: CASE f() OF
+      +3: RETURN;
+    ELSE
+    END_CASE
+  -7:
+END_CASE;
+RETURN;
+END_PROGRAM`)
+	if len(prog.Body) != 2 {
+		t.Fatalf("statements after CASE: %d", len(prog.Body))
+	}
+	stmt := prog.Body[0].(*ast.CaseStatement)
+	const want = `Case
+  Selector:
+    Member(Out)
+      Ident(inst)
+  Branch(-32768..-1, +0):
+  Branch(1..5):
+    Case
+      Selector:
+        Call
+          Callee:
+            Ident(f)
+      Branch(+3):
+        Return
+      Else:
+  Branch(-7):
+`
+	if got := stmt.String(); got != want {
+		t.Fatalf("got:\n%swant:\n%s", got, want)
+	}
+	labels := stmt.Branches[0].Labels
+	if stmt.Line() != 2 || len(labels) != 2 || labels[0].High == nil ||
+		labels[0].Low.Tok.Line != 3 || labels[0].Low.Tok.Col != 3 ||
+		labels[0].High.Tok.Col != 11 || labels[1].Low.Tok.Col != 15 || labels[1].High != nil {
+		t.Fatalf("CASE line %d, labels %+v", stmt.Line(), labels)
+	}
+}
+
+func TestCaseDrafts(t *testing.T) {
+	for _, name := range []string{"ops_case", "ops_all"} {
+		t.Run(name, func(t *testing.T) {
+			src, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".st.draft"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := parser.New(lexer.New(string(src))).ParseSourceFile(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestCaseErrors(t *testing.T) {
+	const bound = "expected decimal integer in CASE label, got "
+	for _, tc := range []struct{ body, want string }{
+		{"CASE OF 1: END_CASE", "expected expression, got OF"},
+		{"CASE x 1: END_CASE", "expected OF, got INT_LIT"},
+		{"CASE x OF END_CASE", bound + "END_CASE"},
+		{"CASE x OF ELSE 1: END_CASE", bound + "ELSE"},
+		{"CASE x OF 1 END_CASE", "expected :, got END_CASE"},
+		{"CASE x OF 1, : END_CASE", bound + ":"},
+		{"CASE x OF 1,,2: END_CASE", bound + ","},
+		{"CASE x OF 1..: END_CASE", bound + ":"},
+		{"CASE x OF 1. .5: END_CASE", "expected '..' in CASE range"},
+		{"CASE x OF 1..-: END_CASE", bound + ":"},
+		{"CASE x OF --1: END_CASE", bound + "-"},
+		{"CASE x OF 1..+-2: END_CASE", bound + "-"},
+		{"CASE x OF name: END_CASE", bound + "IDENT"},
+		{"CASE x OF f(): END_CASE", bound + "IDENT"},
+		{"CASE x OF (1): END_CASE", bound + "("},
+		{"CASE x OF 1+2: END_CASE", "expected :, got +"},
+		{"CASE x OF TRUE: END_CASE", bound + "TRUE"},
+		{"CASE x OF 1.5: END_CASE", bound + "REAL_LIT"},
+		{"CASE x OF 1: ELSE 2: END_CASE", "unexpected token INT_LIT"},
+		{"CASE x OF 1: ELSE ELSE END_CASE", "expected END_CASE, got ELSE"},
+		{"CASE x OF 1:", "expected END_CASE, got END_PROGRAM"},
+		{"CASE x OF 1: END_FOR", "expected END_CASE, got END_FOR"},
+		{"CASE x OF 1: IF b THEN END_CASE", "expected END_IF, got END_CASE"},
+		{"CASE x OF 1: WHILE b DO 2: END_WHILE END_CASE", "unexpected token INT_LIT"},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			src := "PROGRAM P\n" + tc.body + " END_PROGRAM"
+			_, err := parser.New(lexer.New(src)).ParseSourceFile()
+			if err == nil || !strings.Contains(err.Error(), "line 2: "+tc.want) {
+				t.Fatalf("got %v, want %q", err, tc.want)
+			}
+		})
+	}
+}

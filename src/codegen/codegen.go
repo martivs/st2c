@@ -856,6 +856,9 @@ func (g *gen) stmt(s ast.Statement) error {
 		g.linef("} while (!(%s));", cond)
 		return nil
 
+	case *ast.CaseStatement:
+		return fmt.Errorf("line %d: codegen: CASE is not supported yet", s.Line())
+
 	case *ast.ReturnStatement:
 		if g.retVar == nil {
 			g.linef("return;")

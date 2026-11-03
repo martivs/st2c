@@ -9,6 +9,7 @@ package parser
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	"st2c/src/ast"
 	"st2c/src/lexer"
@@ -227,8 +228,12 @@ func (p *Parser) parseType() string {
 // parseStatements читает операторы до терминатора блока (END_*, ELSIF, ELSE,
 // UNTIL, EOF).
 func (p *Parser) parseStatements() []ast.Statement {
+	return p.parseStatementsUntil(p.isBlockEnd)
+}
+
+func (p *Parser) parseStatementsUntil(atEnd func() bool) []ast.Statement {
 	var stmts []ast.Statement
-	for p.err == nil && !p.isBlockEnd() {
+	for p.err == nil && !atEnd() {
 		s := p.parseStatement()
 		if s == nil {
 			break
@@ -247,7 +252,7 @@ func (p *Parser) isBlockEnd() bool {
 	switch p.cur.Type {
 	case lexer.END_PROGRAM, lexer.END_FUNCTION, lexer.END_FUNCTION_BLOCK,
 		lexer.END_IF, lexer.ELSIF, lexer.ELSE, lexer.END_FOR,
-		lexer.END_WHILE, lexer.UNTIL, lexer.END_REPEAT, lexer.EOF:
+		lexer.END_WHILE, lexer.UNTIL, lexer.END_REPEAT, lexer.END_CASE, lexer.EOF:
 		return true
 	default:
 		return false
@@ -261,6 +266,8 @@ func (p *Parser) parseStatement() ast.Statement {
 		return p.parseAssignOrCall()
 	case lexer.IF:
 		return p.parseIf()
+	case lexer.CASE:
+		return p.parseCase()
 	case lexer.FOR:
 		return p.parseFor()
 	case lexer.WHILE:
@@ -344,6 +351,79 @@ func (p *Parser) parseIf() ast.Statement {
 	p.expect(lexer.END_IF)
 	p.optionalSemicolon()
 	return stmt
+}
+
+// parseCase: CASE expr OF branch {branch} [ELSE {statement}] END_CASE ;?
+func (p *Parser) parseCase() ast.Statement {
+	tok := p.expect(lexer.CASE)
+	stmt := &ast.CaseStatement{Tok: tok, Selector: p.parseExpression(lowestPrec)}
+	p.expect(lexer.OF)
+	for p.err == nil {
+		stmt.Branches = append(stmt.Branches, p.parseCaseBranch())
+		if !p.isCaseLabelStart() {
+			break
+		}
+	}
+	if p.curIs(lexer.ELSE) {
+		p.nextToken()
+		stmt.Else = p.parseStatements()
+		if stmt.Else == nil {
+			stmt.Else = []ast.Statement{} // пустой ELSE отличается от отсутствующего
+		}
+	}
+	p.expect(lexer.END_CASE)
+	p.optionalSemicolon()
+	return stmt
+}
+
+func (p *Parser) parseCaseBranch() ast.CaseBranch {
+	labels := []ast.CaseLabel{p.parseCaseLabel()}
+	for p.err == nil && p.curIs(lexer.COMMA) {
+		p.nextToken()
+		labels = append(labels, p.parseCaseLabel())
+	}
+	p.expect(lexer.COLON)
+	return ast.CaseBranch{Labels: labels, Body: p.parseStatementsUntil(p.isCaseBranchEnd)}
+}
+
+func (p *Parser) isCaseLabelStart() bool {
+	return p.curIs(lexer.INT_LIT) || p.curIs(lexer.PLUS) || p.curIs(lexer.MINUS)
+}
+
+// Только тело помеченной ветви заканчивается перед следующей меткой.
+func (p *Parser) isCaseBranchEnd() bool {
+	return p.isBlockEnd() || p.isCaseLabelStart()
+}
+
+func (p *Parser) parseCaseLabel() ast.CaseLabel {
+	label := ast.CaseLabel{Low: p.parseCaseBound()}
+	if p.err == nil && p.curIs(lexer.DOT) {
+		dot := p.cur
+		p.nextToken()
+		if !p.curIs(lexer.DOT) || p.cur.Line != dot.Line || p.cur.Col != dot.Col+1 {
+			p.fail("expected '..' in CASE range")
+			return label
+		}
+		p.nextToken()
+		high := p.parseCaseBound()
+		label.High = &high
+	}
+	return label
+}
+
+func (p *Parser) parseCaseBound() ast.CaseBound {
+	bound := ast.CaseBound{Tok: p.cur}
+	if p.curIs(lexer.PLUS) || p.curIs(lexer.MINUS) {
+		bound.Text = p.cur.Literal
+		p.nextToken()
+	}
+	if !p.curIs(lexer.INT_LIT) || strings.Trim(p.cur.Literal, "0123456789") != "" {
+		p.fail(fmt.Sprintf("expected decimal integer in CASE label, got %s %q", p.cur.Type, p.cur.Literal))
+		return bound
+	}
+	bound.Text += p.cur.Literal
+	p.nextToken()
+	return bound
 }
 
 // parseFor: FOR IDENT := expression TO expression [BY expression] DO

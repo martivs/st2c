@@ -1677,3 +1677,10 @@ func TestCheckAfterReturn(t *testing.T) {
 		t.Fatalf("errors after RETURN: %v", errs)
 	}
 }
+
+func TestCaseNotSupported(t *testing.T) {
+	errs := check(t, "PROGRAM P\nIF TRUE THEN\n  CASE 1 OF 1: END_CASE\nEND_IF\nEND_PROGRAM")
+	if len(errs) != 1 || errs[0].Error() != "line 3:3: CASE is not supported yet" {
+		t.Fatalf("errors: %v", errs)
+	}
+}

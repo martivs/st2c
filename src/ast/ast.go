@@ -360,6 +360,59 @@ func (s *IfStatement) String() string {
 	return b.String()
 }
 
+// CaseBound хранит десятичное написание со знаком и позицию его начала.
+type CaseBound struct {
+	Text string
+	Tok  lexer.Token
+}
+
+type CaseLabel struct {
+	Low  CaseBound
+	High *CaseBound // nil для одиночной метки
+}
+
+type CaseBranch struct {
+	Labels []CaseLabel
+	Body   []Statement
+}
+
+type CaseStatement struct {
+	Tok      lexer.Token
+	Selector Expression
+	Branches []CaseBranch
+	Else     []Statement // nil, если ELSE отсутствует
+}
+
+func (s *CaseStatement) statementNode() {}
+func (s *CaseStatement) Line() int      { return s.Tok.Line }
+func (s *CaseStatement) String() string {
+	var b strings.Builder
+	b.WriteString("Case\n")
+	indent(&b, "Selector:", 1)
+	indent(&b, s.Selector.String(), 2)
+	for _, branch := range s.Branches {
+		var labels []string
+		for _, label := range branch.Labels {
+			text := label.Low.Text
+			if label.High != nil {
+				text += ".." + label.High.Text
+			}
+			labels = append(labels, text)
+		}
+		indent(&b, "Branch("+strings.Join(labels, ", ")+"):", 1)
+		for _, st := range branch.Body {
+			indent(&b, st.String(), 2)
+		}
+	}
+	if s.Else != nil {
+		indent(&b, "Else:", 1)
+		for _, st := range s.Else {
+			indent(&b, st.String(), 2)
+		}
+	}
+	return b.String()
+}
+
 // ForStatement — `FOR Var := Start TO End [BY Step] DO Body END_FOR`.
 // Var по IEC — простой идентификатор; хранится узлом *Identifier ради
 // позиции. Step == nil → шаг 1.
