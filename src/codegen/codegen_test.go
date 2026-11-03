@@ -70,6 +70,7 @@ var goldenExamples = []string{
 	"ops_arith",
 	"ops_power",
 	"ops_return",
+	"ops_case",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
@@ -77,6 +78,7 @@ var goldenExamples = []string{
 // сканов; значения по сканам выписаны в комментариях самих .st.
 var exampleScans = map[string]int{
 	"ops_return": 3,
+	"ops_case":   3,
 	"fb_counter": 3,
 	"fb_nested":  3,
 	"bool_all":   3,
@@ -249,37 +251,13 @@ func runGeneratedC(t *testing.T, code, want string) {
 	if err := os.WriteFile(source, []byte(code), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(gcc, "-std=c99", "-Wall", "-Wextra", source, "-o", bin).CombinedOutput(); err != nil {
+	if out, err := exec.Command(gcc, "-std=c99", "-pedantic-errors", "-Wall", "-Wextra", source, "-o", bin).CombinedOutput(); err != nil {
 		t.Fatalf("gcc: %v\n%s", err, out)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), runTimeout)
 	defer cancel()
 	if out, err := exec.CommandContext(ctx, bin).CombinedOutput(); err != nil || string(out) != want {
 		t.Fatalf("got %q (%v), want %q", out, err, want)
-	}
-}
-
-// Черновики CASE уже проходят Check, но Generate обязан вернуть ошибку без C.
-func TestCaseDrafts(t *testing.T) {
-	for _, name := range []string{"ops_case", "ops_all"} {
-		t.Run(name, func(t *testing.T) {
-			src, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".st.draft"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			sf, err := parser.New(lexer.New(string(src))).ParseSourceFile()
-			if err != nil {
-				t.Fatal(err)
-			}
-			info, errs := sema.Check(sf)
-			if len(errs) != 0 {
-				t.Fatalf("Check: %v", errs)
-			}
-			code, err := codegen.Generate(sf, info, codegen.Options{})
-			if code != "" || err == nil || !strings.Contains(err.Error(), "codegen: CASE is not supported yet") {
-				t.Fatalf("Generate: code = %q, err = %v", code, err)
-			}
-		})
 	}
 }
 
@@ -296,12 +274,6 @@ func TestNameErrors(t *testing.T) {
 			name:       "не-ASCII имя переменной",
 			src:        "PROGRAM P\nVAR\nпеременная : INT;\nEND_VAR\nEND_PROGRAM",
 			wantSubstr: "line 3:1: codegen: identifier \"переменная\" is not representable in C",
-		},
-		{
-			name:       "CASE при обходе sema",
-			src:        "PROGRAM P\nCASE 1 OF 1: END_CASE\nEND_PROGRAM",
-			wantSubstr: "line 2: codegen: CASE is not supported yet",
-			skipSema:   true,
 		},
 		{
 			name:       "склейка после префиксации",
@@ -338,8 +310,14 @@ func TestNameErrors(t *testing.T) {
 			skipSema:   true,
 		},
 		{
+			name:       "EXIT внутри CASE без цикла",
+			src:        "PROGRAM P\nCASE 1 OF 1: EXIT; END_CASE;\nEND_PROGRAM",
+			wantSubstr: "line 2: codegen: internal: EXIT outside of a loop",
+			skipSema:   true,
+		},
+		{
 			// Тот же EXIT, но перед PROGRAM в файле стоит POU с циклом: пиннит,
-			// что счётчик loops в общем на весь файл gen не протекает между POU
+			// что контекст цикла в общем на весь файл gen не протекает между POU
 			// (в отличие от sema, где checker новый на каждый POU).
 			name:       "EXIT вне цикла после POU с циклом",
 			src:        "FUNCTION F : INT\nVAR k : INT;\nEND_VAR\nWHILE k < 3 DO\nk := k + 1;\nEXIT;\nEND_WHILE\nF := k;\nEND_FUNCTION\nPROGRAM P\nEXIT;\nEND_PROGRAM",

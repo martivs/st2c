@@ -457,7 +457,7 @@ func funcSignature(info *funcInfo) (string, error) {
 
 // gen — состояние генерации: буфер, отступ, контекст текущего POU (таблица
 // имён + признак «переменные живут в struct состояния»), счётчик суффиксов
-// временных FOR (уникальность при вложенности) и глубина циклов (защита для
+// временных FOR (уникальность при вложенности) и контекст ближайшего цикла (цель для
 // EXIT).
 type gen struct {
 	b         *strings.Builder
@@ -473,11 +473,7 @@ type gen struct {
 	info      *sema.Info           // side-table sema: типы выражений, вызванные builtins
 	retVar    *varInfo             // результат текущей FUNCTION, nil в теле PROGRAM/ФБ
 	forSeq    int
-	// loops — глубина вложенности циклов в точке эмиссии: EXIT при нуле дал бы
-	// break вне цикла. В отличие от sema, где checker новый на каждый POU, gen
-	// один на весь файл, поэтому loops сбрасывается вместе с forSeq в
-	// emitInit/emitStep/emitFunction.
-	loops int
+	loop      *loopExit // ближайший цикл ST, nil вне цикла
 }
 
 // Новые служебные имена не должны затенять пользовательские и наоборот.
@@ -609,7 +605,7 @@ func (g *gen) emitTypedef(info *stateInfo) error {
 // применяется к каждому имени. Поле-экземпляр ФБ рекурсивно зовёт свой
 // _init (инициализатор у экземпляра отвергла sema).
 func (g *gen) emitInit(info *stateInfo) error {
-	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
+	g.vars, g.deref, g.forSeq, g.loop = info.vars, true, 0, nil
 	g.linef("void %s_init(%s *self) {", info.cName, info.cName)
 	defer g.bufferBody()()
 	g.ind++
@@ -642,7 +638,7 @@ func (g *gen) emitInit(info *stateInfo) error {
 // Name_body у ФБ); переменные — поля struct, обращение через self->.
 func (g *gen) emitStep(info *stateInfo) error {
 	g.retVar = nil
-	g.vars, g.deref, g.forSeq, g.loops = info.vars, true, 0, 0
+	g.vars, g.deref, g.forSeq, g.loop = info.vars, true, 0, nil
 	g.linef("void %s_%s(%s *self) {", info.cName, info.stepName, info.cName)
 	defer g.bufferBody()()
 	g.ind++
@@ -663,7 +659,7 @@ func (g *gen) emitStep(info *stateInfo) error {
 // вызывающего, все входы функции по sema обязательны (дефолты входов — долг).
 func (g *gen) emitFunction(info *funcInfo) error {
 	g.retVar = info.retVar
-	g.vars, g.deref, g.forSeq, g.loops = info.vars, false, 0, 0
+	g.vars, g.deref, g.forSeq, g.loop = info.vars, false, 0, nil
 	sig, err := funcSignature(info)
 	if err != nil {
 		return err
@@ -815,9 +811,11 @@ func (g *gen) stmt(s ast.Statement) error {
 		return nil
 
 	case *ast.ForStatement:
+		defer g.enterLoop(s.Body)()
 		return g.forStmt(s)
 
 	case *ast.WhileStatement:
+		defer g.enterLoop(s.Body)()
 		// Условие вычисляется заново перед каждой итерацией — в отличие от
 		// границ FOR, которые по решению 6 вычисляются один раз до входа.
 		cond, err := g.expr(s.Cond)
@@ -826,16 +824,15 @@ func (g *gen) stmt(s ast.Statement) error {
 		}
 		g.linef("while (%s) {", cond)
 		g.ind++
-		g.loops++
 		if err := g.stmts(s.Body); err != nil {
 			return err
 		}
-		g.loops--
 		g.ind--
 		g.linef("}")
 		return nil
 
 	case *ast.RepeatStatement:
+		defer g.enterLoop(s.Body)()
 		// UNTIL c — «повторять, пока НЕ c», поэтому условие продолжения в C
 		// отрицается. Отрицание всегда в скобках: g.expr у бинарной операции
 		// уже возвращает (a > b), и выходит !((a > b)), а у переменной —
@@ -843,11 +840,9 @@ func (g *gen) stmt(s ast.Statement) error {
 		// «скобки надёжнее читаемости» сохраняется.
 		g.linef("do {")
 		g.ind++
-		g.loops++
 		if err := g.stmts(s.Body); err != nil {
 			return err
 		}
-		g.loops--
 		g.ind--
 		cond, err := g.expr(s.Cond)
 		if err != nil {
@@ -857,7 +852,7 @@ func (g *gen) stmt(s ast.Statement) error {
 		return nil
 
 	case *ast.CaseStatement:
-		return fmt.Errorf("line %d: codegen: CASE is not supported yet", s.Line())
+		return g.caseStmt(s)
 
 	case *ast.ReturnStatement:
 		if g.retVar == nil {
@@ -868,18 +863,11 @@ func (g *gen) stmt(s ast.Statement) error {
 		return nil
 
 	case *ast.ExitStatement:
-		// Инвариант решения 7 плана CTRL: goto в сгенерированном C не бывает
-		// никогда, поэтому EXIT — всегда просто break. Это верно потому, что
-		// единственные конструкции C, перехватывающие break, в выходе — циклы,
-		// полученные из циклов ST: обёртка FOR вокруг for (решение 6) — блок, а
-		// не цикл, и break из неё уходит именно в сам for; if тоже не ловит
-		// break. Если codegen когда-нибудь начнёт эмитить ещё одного ловца
-		// break (C-switch будущего CASE), EXIT внутри него передаётся наружу
-		// флагом __exitN — поднять флаг, выйти из switch, после switch
-		// проверить и сделать break уже из цикла. Сам флаг здесь не нужен и не
-		// реализован.
-		if g.loops == 0 {
+		if g.loop == nil {
 			return fmt.Errorf("line %d: codegen: internal: EXIT outside of a loop (sema must reject this)", s.Line())
+		}
+		if g.loop.crosses[s] {
+			g.linef("%s = 1;", g.loop.flag)
 		}
 		g.linef("break;")
 		return nil
@@ -1014,11 +1002,9 @@ func (g *gen) forStmt(s *ast.ForStatement) error {
 	g.linef("for (; %s; %s += %s) {", cond, i, st)
 	g.ind++
 	g.linef("%s = (%s)%s;", g.ref(vi), narrow, i)
-	g.loops++
 	if err := g.stmts(s.Body); err != nil {
 		return err
 	}
-	g.loops--
 	g.ind--
 	g.linef("}")
 	g.ind--

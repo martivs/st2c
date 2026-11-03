@@ -1377,20 +1377,6 @@ END_PROGRAM`)
 	}
 }
 
-func TestCaseDrafts(t *testing.T) {
-	for _, name := range []string{"ops_case", "ops_all"} {
-		t.Run(name, func(t *testing.T) {
-			src, err := os.ReadFile(filepath.Join("..", "..", "examples", name+".st.draft"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := parser.New(lexer.New(string(src))).ParseSourceFile(); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
 func TestCaseErrors(t *testing.T) {
 	const bound = "expected decimal integer in CASE label, got "
 	for _, tc := range []struct{ body, want string }{

@@ -1628,6 +1628,17 @@ func TestExamplesClean(t *testing.T) {
 	}
 }
 
+// Until the final OPS stage, the integration draft is outside the *.st glob.
+func TestOpsAllDraft(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("..", "..", "examples", "ops_all.st.draft"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if errs := check(t, string(src)); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+}
+
 func TestPowerTypes(t *testing.T) {
 	for _, tc := range []struct {
 		expr           string
