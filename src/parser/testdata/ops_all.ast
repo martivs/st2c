@@ -1,0 +1,106 @@
+Function(Choose : REAL)
+  VarBlock(VAR_INPUT)
+    VarDecl(n : INT)
+  Case
+    Selector:
+      Binary(MOD)
+        Unary(+)
+          Ident(n)
+        Int(3)
+    Branch(1..2):
+      Assign
+        Target:
+          Ident(Choose)
+        Value:
+          Binary(**)
+            Call
+              Callee:
+                Ident(INT_TO_REAL)
+              Arg
+                Ident(n)
+            Int(2)
+      Return
+    Else:
+      Assign
+        Target:
+          Ident(Choose)
+        Value:
+          Real(0.5)
+FunctionBlock(Accumulate)
+  VarBlock(VAR_INPUT)
+    VarDecl(value : REAL)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(total : REAL)
+  Assign
+    Target:
+      Ident(total)
+    Value:
+      Binary(+)
+        Ident(total)
+        Ident(value)
+Program(OpsAll)
+  VarBlock(VAR)
+    VarDecl(counter : Accumulate)
+    VarDecl(scan : INT)
+    VarDecl(value, total : REAL)
+    VarDecl(i, marks : INT)
+  Assign
+    Target:
+      Ident(scan)
+    Value:
+      Binary(+)
+        Ident(scan)
+        Int(1)
+  Assign
+    Target:
+      Ident(value)
+    Value:
+      Call
+        Callee:
+          Ident(Choose)
+        Arg
+          Ident(scan)
+  CallStmt
+    Call
+      Callee:
+        Ident(counter)
+      Arg(value :=)
+        Ident(value)
+      Arg(total =>)
+        Ident(total)
+  Assign
+    Target:
+      Ident(marks)
+    Value:
+      Int(0)
+  For(i)
+    Start:
+      Int(1)
+    End:
+      Int(3)
+    Do:
+      Case
+        Selector:
+          Ident(i)
+        Branch(1):
+          Repeat
+            Body:
+              Assign
+                Target:
+                  Ident(marks)
+                Value:
+                  Binary(+)
+                    Ident(marks)
+                    Int(1)
+              Exit
+            Until:
+              Bool(TRUE)
+        Branch(2):
+          Exit
+      Assign
+        Target:
+          Ident(marks)
+        Value:
+          Binary(+)
+            Ident(marks)
+            Int(10)
