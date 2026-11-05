@@ -72,19 +72,24 @@ var goldenExamples = []string{
 	"ops_return",
 	"ops_case",
 	"ops_all",
+	"mixed_pipeline",
+	"mixed_control",
+	"mixed_numeric",
 }
 
 // exampleScans — сколько сканов зовёт драйвер эталона (по умолчанию 1).
 // Смысл ФБ — состояние, переживающее скан, — виден только за несколько
 // сканов; значения по сканам выписаны в комментариях самих .st.
 var exampleScans = map[string]int{
-	"ops_return": 3,
-	"ops_case":   3,
-	"ops_all":    3,
-	"fb_counter": 3,
-	"fb_nested":  3,
-	"bool_all":   3,
-	"ctrl_all":   3,
+	"mixed_pipeline": 4,
+	"mixed_control":  3,
+	"ops_return":     3,
+	"ops_case":       3,
+	"ops_all":        3,
+	"fb_counter":     3,
+	"fb_nested":      3,
+	"bool_all":       3,
+	"ctrl_all":       3,
 }
 
 // runTimeout — предел на запуск собранного бинаря: режим отказа сломанного
@@ -155,7 +160,8 @@ func TestGCC(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			bin := filepath.Join(t.TempDir(), name)
 			args := []string{"-std=c99", "-Wall", "-Wextra", "-o", bin, filepath.Join("testdata", name+".c")}
-			if name == "ops_power" || name == "ops_all" {
+			switch name {
+			case "ops_power", "ops_all", "mixed_pipeline", "mixed_control", "mixed_numeric":
 				args = append(args, "-lm")
 			}
 			cmd := exec.Command(gcc, args...)

@@ -1,0 +1,272 @@
+Function(Blend : REAL)
+  VarBlock(VAR_INPUT)
+    VarDecl(x : REAL)
+    VarDecl(n : INT)
+    VarDecl(gate : BOOL)
+  VarBlock(VAR_TEMP)
+    VarDecl(base : REAL)
+      Init:
+        Binary(**)
+          Ident(x)
+          Int(2)
+    VarDecl(remainder : INT)
+      Init:
+        Binary(MOD)
+          Binary(MOD)
+            Unary(+)
+              Ident(n)
+            Int(5)
+          Int(3)
+    VarDecl(half : REAL)
+      Init:
+        Binary(/)
+          Int(1)
+          Int(2)
+  If
+    Cond:
+      Unary(NOT)
+        Ident(gate)
+    Then:
+      Return
+  Repeat
+    Body:
+      Case
+        Selector:
+          Ident(remainder)
+        Branch(0):
+          Assign
+            Target:
+              Ident(Blend)
+            Value:
+              Binary(+)
+                Ident(base)
+                Ident(half)
+          Return
+        Branch(1..2):
+          Assign
+            Target:
+              Ident(Blend)
+            Value:
+              Binary(/)
+                Ident(base)
+                Binary(+)
+                  Call
+                    Callee:
+                      Ident(INT_TO_REAL)
+                    Arg
+                      Ident(remainder)
+                  Int(1)
+          Exit
+        Else:
+          Assign
+            Target:
+              Ident(Blend)
+            Value:
+              Unary(-)
+                Int(1)
+    Until:
+      Bool(TRUE)
+Program(MixedNumeric)
+  VarBlock(VAR)
+    VarDecl(seed : REAL)
+      Init:
+        Binary(**)
+          Binary(/)
+            Int(1)
+            Int(2)
+          Int(2)
+    VarDecl(n : INT)
+      Init:
+        Binary(MOD)
+          Int(16)
+          Int(5)
+    VarDecl(negative : INT)
+      Init:
+        Binary(MOD)
+          Unary(-)
+            Int(17)
+          Int(5)
+    VarDecl(unit : REAL)
+      Init:
+        Binary(**)
+          Int(2)
+          Binary(/)
+            Int(1)
+            Int(2)
+    VarDecl(a, b, c, nested, powf : REAL)
+    VarDecl(rounded, ticks, i, st2c_lhs : INT)
+    VarDecl(safe, logic : BOOL)
+  Assign
+    Target:
+      Ident(a)
+    Value:
+      Call
+        Callee:
+          Ident(Blend)
+        Arg(n :=)
+          Ident(n)
+        Arg(gate :=)
+          Bool(TRUE)
+        Arg(x :=)
+          Binary(+)
+            Ident(seed)
+            Binary(/)
+              Int(1)
+              Int(4)
+  Assign
+    Target:
+      Ident(b)
+    Value:
+      Call
+        Callee:
+          Ident(Blend)
+        Arg
+          Int(2)
+        Arg(n :=)
+          Int(5)
+        Arg(gate :=)
+          Bool(TRUE)
+  Assign
+    Target:
+      Ident(c)
+    Value:
+      Call
+        Callee:
+          Ident(Blend)
+        Arg
+          Binary(/)
+            Int(1)
+            Int(2)
+        Arg(n :=)
+          Int(7)
+        Arg(gate :=)
+          Bool(FALSE)
+  Assign
+    Target:
+      Ident(nested)
+    Value:
+      Call
+        Callee:
+          Ident(Blend)
+        Arg
+          Call
+            Callee:
+              Ident(Blend)
+            Arg
+              Int(1)
+            Arg(n :=)
+              Int(5)
+            Arg(gate :=)
+              Bool(TRUE)
+        Arg(n :=)
+          Int(6)
+        Arg(gate :=)
+          Bool(TRUE)
+  Assign
+    Target:
+      Ident(powf)
+    Value:
+      Binary(+)
+        Binary(+)
+          Ident(a)
+          Ident(b)
+        Ident(nested)
+  Assign
+    Target:
+      Ident(rounded)
+    Value:
+      Call
+        Callee:
+          Ident(REAL_TO_INT)
+        Arg
+          Ident(powf)
+  While
+    Cond:
+      Binary(<)
+        Binary(**)
+          Int(2)
+          Ident(ticks)
+        Int(8)
+    Body:
+      Assign
+        Target:
+          Ident(ticks)
+        Value:
+          Binary(+)
+            Ident(ticks)
+            Int(1)
+  Repeat
+    Body:
+      Assign
+        Target:
+          Ident(n)
+        Value:
+          Binary(+)
+            Ident(n)
+            Int(1)
+    Until:
+      Binary(=)
+        Binary(MOD)
+          Ident(n)
+          Int(4)
+        Int(0)
+  For(i)
+    Start:
+      Int(3)
+    End:
+      Int(1)
+    Step:
+      Unary(-)
+        Binary(+)
+          Int(1)
+          Binary(MOD)
+            Ident(n)
+            Int(2)
+    Do:
+      Assign
+        Target:
+          Ident(st2c_lhs)
+        Value:
+          Binary(+)
+            Ident(st2c_lhs)
+            Ident(i)
+  Assign
+    Target:
+      Ident(safe)
+    Value:
+      Binary(AND)
+        Binary(OR)
+          Binary(=)
+            Ident(n)
+            Int(4)
+          Binary(>)
+            Binary(**)
+              Int(0)
+              Unary(-)
+                Int(1)
+            Int(0)
+        Unary(NOT)
+          Binary(AND)
+            Binary(<>)
+              Ident(n)
+              Int(4)
+            Binary(>)
+              Binary(**)
+                Unary(-)
+                  Int(2)
+                Real(0.5)
+              Int(0)
+  Assign
+    Target:
+      Ident(logic)
+    Value:
+      Binary(OR)
+        Binary(XOR)
+          Ident(safe)
+          Binary(>)
+            Ident(a)
+            Ident(b)
+        Unary(NOT)
+          Binary(=)
+            Ident(ticks)
+            Int(3)

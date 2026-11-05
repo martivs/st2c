@@ -1,0 +1,15 @@
+seed=0.25
+n=4
+negative=-2
+unit=1
+a=0.125
+b=4.5
+c=0
+nested=1.125
+powf=5.75
+rounded=6
+ticks=3
+i=1
+st2c_lhs=6
+safe=1
+logic=1

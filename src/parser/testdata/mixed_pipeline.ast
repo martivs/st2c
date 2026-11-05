@@ -1,0 +1,192 @@
+Program(MixedPipeline)
+  VarBlock(VAR)
+    VarDecl(scan : INT)
+    VarDecl(increment, leftTotal, rightTotal, combined : REAL)
+    VarDecl(enabled, ready : BOOL)
+    VarDecl(left, right : Channel)
+    VarDecl(sink : Bucket)
+  Assign
+    Target:
+      Ident(scan)
+    Value:
+      Binary(+)
+        Ident(scan)
+        Int(1)
+  Assign
+    Target:
+      Ident(enabled)
+    Value:
+      Binary(<>)
+        Binary(MOD)
+          Unary(+)
+            Ident(scan)
+          Int(3)
+        Int(0)
+  Assign
+    Target:
+      Ident(increment)
+    Value:
+      Call
+        Callee:
+          Ident(Sample)
+        Arg(gain :=)
+          Binary(/)
+            Int(1)
+            Int(2)
+        Arg(n :=)
+          Ident(scan)
+  If
+    Cond:
+      Binary(=)
+        Ident(scan)
+        Int(1)
+    Then:
+      Assign
+        Target:
+          Member(step)
+            Ident(right)
+        Value:
+          Binary(/)
+            Int(1)
+            Int(2)
+  Assign
+    Target:
+      Member(delta)
+        Ident(sink)
+    Value:
+      Unary(-)
+        Int(100)
+  CallStmt
+    Call
+      Callee:
+        Ident(left)
+      Arg(step :=)
+        Ident(increment)
+      Arg(enable :=)
+        Ident(enabled)
+      Arg(total =>)
+        Member(delta)
+          Ident(sink)
+  Assign
+    Target:
+      Ident(leftTotal)
+    Value:
+      Member(total)
+        Ident(left)
+  CallStmt
+    Call
+      Callee:
+        Ident(sink)
+  CallStmt
+    Call
+      Callee:
+        Ident(right)
+      Arg(enable :=)
+        Unary(NOT)
+          Ident(enabled)
+      Arg(total =>)
+        Ident(rightTotal)
+  Assign
+    Target:
+      Ident(combined)
+    Value:
+      Binary(+)
+        Member(total)
+          Ident(sink)
+        Ident(rightTotal)
+  Assign
+    Target:
+      Ident(ready)
+    Value:
+      Binary(XOR)
+        Member(ready)
+          Ident(left)
+        Member(ready)
+          Ident(right)
+FunctionBlock(Channel)
+  VarBlock(VAR_INPUT)
+    VarDecl(step : REAL)
+    VarDecl(enable : BOOL)
+      Init:
+        Bool(TRUE)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(total : REAL)
+    VarDecl(ready : BOOL)
+  VarBlock(VAR)
+    VarDecl(inner : Bucket)
+  If
+    Cond:
+      Unary(NOT)
+        Ident(enable)
+    Then:
+      Assign
+        Target:
+          Ident(ready)
+        Value:
+          Bool(FALSE)
+      Return
+  CallStmt
+    Call
+      Callee:
+        Ident(inner)
+      Arg(delta :=)
+        Ident(step)
+      Arg(total =>)
+        Ident(total)
+  Assign
+    Target:
+      Ident(ready)
+    Value:
+      Binary(>=)
+        Ident(total)
+        Int(1)
+Function(Sample : REAL)
+  VarBlock(VAR_INPUT)
+    VarDecl(n : INT)
+    VarDecl(gain : REAL)
+  Case
+    Selector:
+      Binary(MOD)
+        Ident(n)
+        Int(3)
+    Branch(0):
+      Return
+    Branch(1):
+      Assign
+        Target:
+          Ident(Sample)
+        Value:
+          Binary(**)
+            Binary(*)
+              Call
+                Callee:
+                  Ident(INT_TO_REAL)
+                Arg
+                  Ident(n)
+              Ident(gain)
+            Int(2)
+      Return
+    Branch(2):
+      Assign
+        Target:
+          Ident(Sample)
+        Value:
+          Binary(*)
+            Call
+              Callee:
+                Ident(INT_TO_REAL)
+              Arg
+                Ident(n)
+            Ident(gain)
+FunctionBlock(Bucket)
+  VarBlock(VAR_INPUT)
+    VarDecl(delta : REAL)
+  VarBlock(VAR_OUTPUT)
+    VarDecl(total : REAL)
+  Assign
+    Target:
+      Ident(total)
+    Value:
+      Binary(+)
+        Ident(total)
+        Ident(delta)
